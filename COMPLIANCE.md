@@ -11,3 +11,30 @@
 
 ## 脱敏
 在存档与对外共享前，需对涉及账户、订单、钱包地址等敏感信息执行脱敏处理，包括哈希、掩码与随机化。脱敏流程需在 `docs/traceability.md` 记录并留存审计。
+# OrderFlow V6 数据合规基线（COMPLIANCE）
+
+## 数据用途（Usage of Data）
+- **用途范围**：仅用于 OrderFlow V6 相关的研究、验证、执行与监控流程，涵盖卡片 101–118、403–406、607、808 所列产物。
+- **禁止用途**：不得用于未获批准的外部商业项目、个人交易或与数字资产无关的分析；不得以任何形式对外转售或训练无关模型。
+- **审批流程**：新增用途须提交合规变更单，并由合规与数据负责人共同签署后方可执行。
+
+## 最少保留期（Minimum Retention Period）
+- **原始数据**（ATAS tick/bar、交易所行情）：最少保留 365 自然日；超期数据需经脱敏或聚合后方可归档或删除。
+- **处理后数据**（processed/parquet、校准产物）：最少保留 180 自然日，并与 `manifest_hash.txt` 中的哈希记录保持一致。
+- **验证与执行报告**（Validator、监控、金丝雀演练）：最少保留 365 自然日，以支持审计及回溯。
+
+## 再分发限制分级（Redistribution Tiers）
+- **内部（Internal）**：允许在授权团队范围内共享，需附带 manifest/calibration 哈希与版本签名。
+- **外部（External Partners）**：仅允许共享经过脱敏、聚合的衍生指标，必须签署 NDA，并记录在 `releases/release.yml` 的 `external_distribution` 列表中。
+- **开源（Open Source）**：禁止直接再分发任何原始或可逆向推导原始交易行为的数据；仅可发布合规批准的匿名化指标或代码示例。
+
+## 数据脱敏与访问控制（Data Sanitization & Access Control）
+- 所有对外共享数据需执行字段级脱敏（移除账户标识、订单细节），并通过 Aggregation ≥ 5 条记录的 k 匿名校验。
+- 访问控制采用基于角色（RBAC）的最小权限模型；访问日志需保留 ≥ 365 日并接受季度审计。
+- Manifest 与 calibration 产物在传输前需进行哈希签名校验，并通过安全通道（SFTP/VPN）分发。
+
+## 发布与审计要求（Release & Audit Requirements）
+- 每次发布必须更新 `releases/release.yml`，绑定 `data_manifest_hash`、`calibration_hash`、`model_artifact_id`，并记录影子模型与一周金丝雀窗口。
+- 缺失本文件或关键段落关键字（“最少保留期”“再分发限制分级”）时，CI 应立即失败并阻断 Gate。
+- 合规团队需在季度审计中复核本文件，并通过 Pull Request 记录任何变更历史。
+

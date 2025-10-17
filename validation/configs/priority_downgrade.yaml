@@ -9,3 +9,19 @@ sources:
   - name: bar
     embargo_bars: 1
     purge_kfold: 5
+# OrderFlow V6 Priority Downgrade Rules
+version: 1
+embargo_bars: 5
+purge_kfold: 5
+triggers:
+  tick_gap:
+    description: "Detected missing tick segments in QC"
+    downgrade_to: bar
+    log_event: true
+  calibration_breach:
+    description: "PSI/KS/ECE 越线或不可合并段"
+    downgrade_to: bar
+    log_event: true
+logging:
+  path: logs/downgrade/
+  level: INFO
