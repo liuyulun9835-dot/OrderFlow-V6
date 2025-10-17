@@ -1,0 +1,13 @@
+build_id: v6.0.0
+data_manifest_hash: placeholder_manifest_hash
+calibration_hash: placeholder_calibration_hash
+model_artifact_id: shadow_model_v1
+shadow_model:
+  start_date: 2024-01-01
+  end_date: 2024-01-07
+  evaluation: canary
+comparison:
+  metrics:
+    sharpe_delta: 0.12
+    turnover_delta: -0.03
+    slippage_delta_bps: -1.5

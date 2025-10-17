@@ -6,8 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 
 DIRECTORIES = [
-    Path("data/atas"),
-    Path("data/exchange"),
+    Path("data/raw/atas/bar"),
+    Path("data/raw/atas/tick"),
+    Path("data/exchange/example_symbol"),
     Path("data/meta"),
     Path("data/processed"),
     Path("logs"),

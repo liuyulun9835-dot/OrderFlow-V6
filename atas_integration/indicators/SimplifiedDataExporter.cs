@@ -29,6 +29,7 @@ namespace AtasCustomIndicators
         private bool _initialized;
         private bool _firstOnCalculateLogged;
         private bool _logDirectoryEnsured;
+        private long _flushSequence;
 
         public SimplifiedDataExporter()
         {
@@ -258,6 +259,7 @@ namespace AtasCustomIndicators
             {
                 if (_pendingByMinute.TryGetValue(minute, out var payload))
                 {
+                    payload.FlushSequence = ++_flushSequence;
                     ready.Add(payload);
                     _pendingByMinute.Remove(minute);
                     _lastProcessedMinuteUtc = minute;
@@ -274,6 +276,7 @@ namespace AtasCustomIndicators
                 var latestPath = Path.Combine(_exportDir, "latest.json");
                 var dayFile = Path.Combine(_exportDir, $"market_data_{payload.TimestampUtc:yyyyMMdd}.jsonl");
 
+                var windowId = payload.TimestampUtc.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture);
                 var document = new Dictionary<string, object?>
                 {
                     ["timestamp"] = payload.TimestampString,
@@ -289,6 +292,9 @@ namespace AtasCustomIndicators
                     ["absorption_detected"] = payload.AbsorptionDetected,
                     ["absorption_strength"] = payload.AbsorptionStrength,
                     ["absorption_side"] = payload.AbsorptionSide ?? string.Empty,
+                    ["window_id"] = windowId,
+                    ["flush_seq"] = payload.FlushSequence,
+                    ["window_convention"] = "[minute_open, minute_close] right-closed",
                     ["exporter_version"] = ExporterVersion,
                     ["schema_version"] = SchemaVersion,
                     ["backfill"] = Backfill
@@ -668,6 +674,7 @@ namespace AtasCustomIndicators
             _pendingByMinute.Clear();
             _sessionAnchorUtc = null;
             _lastProcessedMinuteUtc = null;
+            _flushSequence = 0;
         }
 
         private void EnsureExportDirectory()
@@ -781,6 +788,7 @@ namespace AtasCustomIndicators
         public bool AbsorptionDetected { get; set; }
         public double AbsorptionStrength { get; set; }
         public string? AbsorptionSide { get; set; }
+        public long FlushSequence { get; set; }
     }
 
     internal readonly struct AbsorptionResult

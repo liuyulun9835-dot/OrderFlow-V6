@@ -4,11 +4,11 @@ param(
     [Parameter(Mandatory = $true)][string]$Until,
     [string]$Exchange = "binance",
     [string]$Timeframe = "1m",
-    [string]$AtasDir = "data/atas",
+    [string]$AtasDir = "data/raw/atas/bar",
     [string]$KlinePath = "",
     [string]$OutputPath = "data/processed/features.parquet",
-    [string]$AtasTz = "Europe/Moscow",
-    [int]$ToleranceSeconds = 45,
+    [string]$AtasTz = "UTC",
+    [int]$ToleranceSeconds = 10,
     [Nullable[int]]$OffsetMinutes = $null
 )
 
@@ -43,6 +43,13 @@ if ([string]::IsNullOrWhiteSpace($KlinePath)) {
 $outputFull = Get-FullPath $OutputPath
 $klineFull = Get-FullPath $KlinePath
 $atasDirFull = Get-FullPath $AtasDir
+
+# Seed initialisation for reproducibility
+$seed = (& $python -c "from orderflow_v6.seeding import seed_all; print(seed_all())").Trim()
+if (-not [string]::IsNullOrWhiteSpace($seed)) {
+    $env:PYTHONHASHSEED = $seed
+    Write-Host "Seed initialised: $seed"
+}
 
 # Step 1: Fetch/append kline data
 $fetchArgs = @(
@@ -125,3 +132,19 @@ if ($qcExit -ne 0) {
 Write-Host "Pipeline completed successfully."
 Write-Host "Features parquet: $outputFull"
 Write-Host "QC report: $reportPath"
+
+$schemaPath = Join-Path $repoRoot "preprocessing/schemas/atas_schema.json"
+$schemaSignature = (Get-FileHash -Path $schemaPath -Algorithm SHA256).Hash
+$exporterVersionLine = (Select-String -Path (Join-Path $repoRoot "atas_integration/indicators/SimplifiedDataExporter.cs") -Pattern "SchemaVersion" -SimpleMatch).Line
+$exporterVersion = ($exporterVersionLine -split '"')[1]
+$dataManifestHash = if (Test-Path $outputFull) { (Get-FileHash -Path $outputFull -Algorithm SHA256).Hash } else { "N/A" }
+
+$summaryPath = Join-Path $repoRoot "results/qc_summary.md"
+$summaryLines = @(
+    "# QC Summary",
+    "Seed: $seed",
+    "Data manifest hash: $dataManifestHash",
+    "Exporter version: $exporterVersion",
+    "Schema signature: $schemaSignature"
+)
+$summaryLines | Set-Content -Path $summaryPath -Encoding UTF8

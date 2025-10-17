@@ -1,0 +1,9 @@
+univariate:
+  alpha: 0.05
+  tests:
+    - name: feature_return
+      effect: cohen_d
+      metric: ttest
+multivariate:
+  alpha: 0.05
+  simulations: 1000

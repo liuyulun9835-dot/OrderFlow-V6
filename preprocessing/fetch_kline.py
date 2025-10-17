@@ -11,6 +11,7 @@ from typing import List, Optional
 import ccxt  # type: ignore
 import pandas as pd
 
+from orderflow_v6.seeding import seed_all
 
 def parse_timeframe(value: str) -> timedelta:
     value = value.strip().lower()
@@ -160,6 +161,8 @@ def save_parquet(df: pd.DataFrame, output_path: Path, append: bool) -> None:
 
 
 def main() -> None:
+    seed = seed_all()
+    print(f"Seed initialised: {seed}")
     args = parse_arguments()
 
     repo_root = Path(__file__).resolve().parents[1]
