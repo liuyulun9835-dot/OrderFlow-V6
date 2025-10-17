@@ -210,12 +210,14 @@
 - **标题**：数据分层与分区（raw → staged → processed）
 - **目标**：建立分层目录结构，支持按日分区存取与重算。
 - **输入**：ATAS 导出、行情数据、桥接配置
-- **输出**：`data/{raw,staged,processed}/symbol/date=YYYY-MM-DD/` 分区、分层字典
+- **输出**：`data/{raw,staged,processed}/symbol/date=YYYY-MM-DD/` 分区、分层字典、`manifest/*.json` 水位快照、`results/manifest_hash.txt`
 - **关键步骤**：
   1) 定义分层规范与元数据字段（生成时间、来源包、schema 版本）。
   2) 实现分区写入策略，保障日粒度重算覆盖上下游。
-  3) 编写回填/重算脚本，支持单日回滚并重建所有层。
-- **DoD**：任意指定日期可在 30 分钟内完成全量重算；训练/验证流程可直接消费日分区。
+-  3) 编写回填/重算脚本，支持单日回滚并重建所有层。
+  4) 计算并落盘 `manifest/*.json` 的 SHA256 内容哈希，写入 `results/manifest_hash.txt`，并在 `results/qc_summary.md` 中回填 `data_manifest_hash` 字段。
+- **约束**：116/117 强依赖 manifest；缺失即拒跑。
+- **DoD**：任一指定日期可在 30 分钟内完成全量重算；训练/验证流程可直接消费日分区；任一训练日可按哈希精确还原到切片。
 - **负责人**：数据工程｜**优先级**：P0｜**依赖**：101-108｜**工时**：M
 
 ### 卡片 110
@@ -223,12 +225,13 @@
 - **标题**：数据清单与水位（manifest & watermark）
 - **目标**：生成初始与增量 manifest，记录覆盖范围、水位与 schema 版本。
 - **输入**：分层分区元数据、导出日志
-- **输出**：`initial.json`、`update_YYYYMMDD.json`、水位对照表
+- **输出**：`initial.json`、`update_YYYYMMDD.json`、水位对照表、`manifest/lineage/*.json`、`results/manifest_hash.txt`
 - **关键步骤**：
-  1) 设计 manifest 结构，包含时间窗口、覆盖率、schema/exporter 版本、水位时间戳。
-  2) 集成到流水线，在初始/增量产出后自动写入 manifest 并校验。
-  3) 提供 manifest 校验工具，供训练/回测按 manifest 复现数据切片。
-- **DoD**：训练/回测可按 manifest 精确复现输入；水位对外可追溯，缺失项有报警。
+  1) 设计 manifest 结构，包含时间窗口、覆盖率、schema/exporter 版本、水位时间戳、`source_ranges`、`schema_signature`、`exporter_meta`、`lineage` 字段。
+  2) 集成到流水线，在初始/增量产出后自动写入 manifest 并校验，同时为全部 manifest 文件计算基于文件内容的 SHA256 哈希并更新 `results/manifest_hash.txt` 与 `results/qc_summary.md` 中的 `data_manifest_hash`。
+  3) 提供 manifest 校验工具，供训练/回测按 manifest 复现数据切片，缺失或哈希不一致时拒绝进入 116/117。
+- **约束**：116/117 强依赖 manifest；缺失或哈希缺失即拒跑。
+- **DoD**：训练/回测可按 manifest 精确复现输入；水位对外可追溯，缺失项有报警；任一 manifest 可通过 `results/manifest_hash.txt` 的 SHA256 内容哈希在任一训练日精准还原到切片。
 - **负责人**：数据工程｜**优先级**：P0｜**依赖**：109｜**工时**：M
 
 ### 卡片 111
@@ -236,12 +239,12 @@
 - **标题**：ATAS Bar 聚合获取（≤3 个月）
 - **目标**：规范导出 `latest+切片`、统一分辨率/时区、生成分区 manifest，缺失率<0.1%。
 - **输入**：ATAS 回放/实时导出、分层目录规范
-- **输出**：`data/raw/atas/bar/{symbol}/resolution={X}/date=YYYY-MM-DD/*.json`、`export_manifest.json`
+- **输出**：`data/raw/atas/bar/{symbol}/resolution={X}/date=YYYY-MM-DD/*.json`、`export_manifest.json`、`data/raw/atas/error_ledger.csv`
 - **关键步骤**：
-  1) 设计多分辨率导出配置（1m/5m/100–1000 tick）并固化 `latest.json` 与日分区结构；
-  2) 统一 UTC 时区与右闭左开边界，生成分区级 metadata（exporter/schema 版本、覆盖窗口、缺失率）；
-  3) 集成 schema 校验与连续性扫描，产出 `bar_continuity_report.md` 并写入 manifest。
-- **DoD**：Schema 校验通过；连续性报告可用于质控复核；缺失率<0.1%。
+  1) 设计多分辨率导出配置（1m/5m/100–1000 tick）并固化 `latest.json` 与日分区结构，导出端写入 `window_id`、`flush_seq`。
+  2) 统一 UTC 时区与分钟级右闭左开边界（回放边界按分钟右闭左开，close 时刻落桶），生成分区级 metadata（exporter/schema 版本、覆盖窗口、缺失率）。
+  3) 集成 schema 校验与连续性扫描，产出 `bar_continuity_report.md` 并写入 manifest，同时维护 `data/raw/atas/error_ledger.csv` 记录断连/补抓/重复段。
+- **DoD**：Schema 校验通过；`bar_continuity_report.md` 连续性≥99.9%；缺失率<0.1%；`tick_quality_report.md` 对应统计到达间隔 CV≤1.5、p99≤3×median，指标不达标需标红并禁止进入 116。
 - **负责人**：数据工程｜**优先级**：P0｜**依赖**：101,102,109｜**工时**：M
 - **风险&缓解**：ATAS 导出窗口受限→分批导出 + manifest 记录缺口；导出脚本异常→加入重试与告警。
 - **落盘路径**：`data/raw/atas/bar/`
@@ -254,10 +257,10 @@
 - **输入**：ATAS 实时导出、存储水位、压缩策略
 - **输出**：`data/raw/atas/tick/{symbol}/date=YYYY-MM-DD/*.{json,parquet}`、`tick_quality_report.md`
 - **关键步骤**：
-  1) 配置高 IOPS 存储目录与滚动写入策略，确保 7 天窗口内逐笔无丢失；
-  2) 实现 JSON→Parquet 压缩归档与索引（按日期/时段分区），生成缺口补抓脚本；
-  3) 生成每日质量日报（缺失率、吞吐、压缩比、重试情况）并推送。
-- **DoD**：7×24h 窗口连续；缺口补抓记录完整；日报准时生成。
+  1) 配置高 IOPS 存储目录与滚动写入策略，确保 7 天窗口内逐笔无丢失，并在元数据中固化 UTC、右闭左开分钟桶及 `window_id`、`flush_seq`；
+  2) 实现 JSON→Parquet 压缩归档与索引（按日期/时段分区），生成缺口补抓脚本并将断连/补抓/重复段同步写入 `data/raw/atas/error_ledger.csv`；
+  3) 生成每日质量日报（缺失率、吞吐、压缩比、重试情况）并推送，附带到达间隔 CV、IQR、p99 指标。
+- **DoD**：7×24h 窗口连续；缺口补抓记录完整；日报准时生成；到达间隔 CV≤1.5、p99≤3×median，未达标条目需标红且阻断进入 116。
 - **负责人**：数据工程｜**优先级**：P0｜**依赖**：101,109｜**工时**：M
 - **风险&缓解**：IO 峰值导致写入失败→预留缓存队列 + 分区限流；ATAS 断连→监控重连与补抓任务。
 - **落盘路径**：`data/raw/atas/tick/`
@@ -284,28 +287,44 @@
 - **标题**：minute↔tick 特征映射与分布校准
 - **目标**：同名因子均值/方差校准、PSI/KS 漂移监控，产出映射与校准报告。
 - **输入**：`index.parquet`、合并后特征、ATAS Tick 特征
-- **输出**：`mapping_tick2bar.pkl`、`calibration_profile.json`、`results/merge_and_calibration_report.md`
+- **输出**：`mapping_tick2bar.pkl`、`calibration_profile.json`（含分层曲线与越线段）、`results/merge_and_calibration_report.md`
 - **关键步骤**：
-  1) 在重叠窗口对 minute 与 tick 特征进行聚合与对齐，构建映射函数与补偿项；
-  2) 计算 PSI/KS/ECE 等指标，识别漂移并记录降级策略；
-  3) 生成校准配置与报告，固化再现步骤与阈值。
-- **DoD**：映射/校准脚本可重现；报告包含 PSI/KS/ECE 指标与结论；降级策略清晰可追溯。
+  1) 在重叠窗口对 minute 与 tick 特征进行聚合与对齐，按波动/成交四分位进行分层 Quantile Mapping，构建映射函数与补偿项。
+  2) 对每一分层计算 PSI/KS/ECE，并要求 PSI<0.2、KS-p>0.05、ECE<3%，任一越线段即标记为不可合并并触发 118 的降级流程。
+  3) 生成校准配置与报告，固化再现步骤与阈值，报告中需包含 offset 曲线、错配率<0.1%、错配合并率定义（被 tolerance 吸附且跨分钟的记录占比）以及整点±1s 边界用例截图。
+- **DoD**：映射/校准脚本可重现；`calibration_profile.json` 记录分层曲线与越线段；报告包含 PSI/KS/ECE 指标、错配率<0.1%、边界截图，并对越线段写入降级白名单；任一分层越线→不可合并并进入 118 的降级流程。
 - **负责人**：量化研究｜**优先级**：P0｜**依赖**：115,112｜**工时**：M
 - **风险&缓解**：重叠窗口不足→延长采集期 + 引入回放补齐；特征漂移剧烈→引入 HSMM 黏性与再校准计划。
 - **落盘路径**：`results/`、`preprocessing/align/`
 - **QA/工具**：Python/Scikit-learn、PSI/KS 工具包、`results/merge_and_calibration_report.md` 模板
+
+### 卡片 117
+- **模块**：映射/校准
+- **标题**：分层映射审计与不可合并段管理
+- **目标**：将分层 Quantile Mapping 的越线段固化为降级白名单，确保 minute↔tick 合并可追溯。
+- **输入**：`calibration_profile.json`、`results/merge_and_calibration_report.md`
+- **输出**：更新后的 `calibration_profile.json`（含降级段列表与 `calibration_hash`）、`results/merge_and_calibration_report.md`（含不可合并段索引）
+- **关键步骤**：
+  1) 依据 116 产出的分层 PSI/KS/ECE 指标，自动识别越线段并写入不可合并标记。
+  2) 将越线段加入降级白名单（供 118 使用），并输出 `calibration_hash` 以供后续签名。
+  3) 在报告中记录降级原因、补救建议与影响窗口，更新 `results/qc_summary.md` 以暴露不可合并段状态。
+- **DoD**：不可合并段均被标记并与 118 降级流程联动；`calibration_profile.json` 写入降级白名单与 `calibration_hash`；报告列出越线指标、补救路径与签名信息。
+- **负责人**：量化研究｜**优先级**：P0｜**依赖**：116｜**工时**：S
+- **风险&缓解**：降级段过多→与数据组联动补抓或重算；哈希签名不一致→复核 109/110 manifest 产出。
+- **落盘路径**：`results/`
+- **QA/工具**：PSI/KS/ECE 扫描脚本、`results/qc_summary.md`
 
 ### 卡片 118
 - **模块**：验证预检
 - **标题**：成本鲁棒与成交可达性闸门
 - **目标**：在进入 Validator v2 前完成 base/+50%/×2 成本与成交可达性预估，不达标不入主流程。
 - **输入**：`mapping_tick2bar.pkl`、`calibration_profile.json`、`validation/configs/costs.yaml`
-- **输出**：`validation/precheck/costs_gate.md`
+- **输出**：`validation/precheck/costs_gate.md`、`validation/configs/priority_downgrade.yaml`
 - **关键步骤**：
-  1) 构建分钟/逐笔级成交量覆盖与冲击惩罚估计，评估 base/+50%/×2 成本下的可执行性；
-  2) 建立预检脚本，生成可执行性评分、成本敏感性曲线与准入判定；
-  3) 将预检结果写入文档与管线检查点，未通过时阻断 Validator v2 流程并触发补救任务。
-- **DoD**：预检脚本自动化；文档列出准入阈值与补救路径；未通过案例可复现阻断行为。
+  1) 构建分钟/逐笔级成交量覆盖与冲击惩罚估计，评估 base/+50%/×2 成本下的可执行性，硬编码右闭左开窗口并在 `labels.parquet` 元数据写入 `label_lag`/`lookahead`/`priority_source`。
+  2) 建立预检脚本，生成可执行性评分、成本敏感性曲线与准入判定，tick 缺口或 116/117 校准越线时通过 `validation/configs/priority_downgrade.yaml` 自动降级到 bar 标签并写日志。
+  3) 将预检结果写入文档与管线检查点，显式输出 `embargo_bars`（如 5）与 `purge_kfold` 参数，未通过时阻断 Validator v2 流程并触发补救任务。
+- **DoD**：预检脚本自动化；文档列出准入阈值、降级策略与补救路径；未通过案例可复现阻断行为；降级行为可追溯且可复现（含 `priority_downgrade.yaml`、日志、`labels.parquet` 元数据、`embargo_bars`/`purge_kfold` 配置）。
 - **负责人**：量化研究｜**优先级**：P0｜**依赖**：116,105｜**工时**：S
 - **风险&缓解**：成交数据偏差→引入冗余来源与置信区间；预估模型过拟合→留出独立窗口验证。
 - **落盘路径**：`validation/precheck/`
@@ -481,9 +500,9 @@
 - **标题**：单变量显著性检验
 - **目标**：效应方向/强度/显著性。
 - **输入**：特征+标签
-- **输出**：表格与图形
-- **关键步骤**：分箱/分位；t/非参检验；多重校正（FDR）。
-- **DoD**：显著因子清单 & 方向一致。
+- **输出**：表格与图形、`validation/configs/preregister.yaml`
+- **关键步骤**：分箱/分位；t/非参检验；效应量（Cohen's d 或 Cliff's delta）计算；FDR-BH 或 Max-T 多重比较控制；维护预注册表（`validation/configs/preregister.yaml`）。
+- **DoD**：显著因子清单 & 方向一致；报告中含效应量与多重比较校正结果；预注册假设与执行记录齐全。
 - **负责人**：量化研究｜**优先级**：P0｜**依赖**：402,118｜**工时**：M
 
 ### 卡片 404
@@ -492,8 +511,8 @@
 - **目标**：提频与提强，含交互项。
 - **输入**：显著因子
 - **输出**：回归系数表、显著性矩阵
-- **关键步骤**：VIF/共线性；交叉验证；稳健回归。
-- **DoD**：稳定性≥0.6；解释变量方向合理。
+- **关键步骤**：VIF/共线性；交叉验证；稳健回归；效应量（Cohen's d、Cliff's delta 或 Partial η²）输出；FDR-BH 或 Max-T 多重比较控制并记录于 `validation/configs/preregister.yaml`。
+- **DoD**：稳定性≥0.6；解释变量方向合理；报告同步输出效应量表与多重比较校正后的 p 值，并附预注册假设引用。
 - **负责人**：量化研究｜**优先级**：P1｜**依赖**：403,118｜**工时**：M
 
 ### 卡片 405
@@ -512,8 +531,8 @@
 - **目标**：统一文件名与模板。
 - **输入**：运行结果
 - **输出**：`OF_V6_stats.xlsx`、`combo_matrix.parquet`、`white_black_list.json`、`report.md`
-- **关键步骤**：表头/字段对齐；版本签名。
-- **DoD**：执行层可直接消费 JSON；文档齐备。
+- **关键步骤**：表头/字段对齐；写入 `schema_version`、`build_id`、`data_manifest_hash`、`calibration_hash` 四键签名；签名不一致时拒收。
+- **DoD**：执行层可直接消费 JSON；文档齐备；所有产出 (`OF_V6_stats.xlsx` / `combo_matrix.parquet` / `white_black_list.json` / `report.md`) 均写入四键签名并经校验一致，不一致文件被执行层拒收。
 - **负责人**：量化研究｜**优先级**：P0｜**依赖**：405｜**工时**：S
 
 ---
@@ -631,10 +650,10 @@
 - **输入**：轨 A/B 状态流、`mapping_tick2bar.pkl`、`validation/precheck/costs_gate.md`
 - **输出**：`execution/switch_policy.yaml`、`logs/switch_audit/*.log`
 - **关键步骤**：
-  1) 设计切换策略（准入阈值、观测窗口、回滚条件）并与 Validator 闸门对齐；
-  2) 实现双源状态路由与健康检测，异常时自动退回轨 A；
-  3) 记录切换/回滚审计日志，定期回放验证决策一致性。
-- **DoD**：热切换演练通过；切换/回滚日志完整；回滚后策略可恢复稳定；执行层接口兼容 V5。
+  1) 设计切换策略（观察期≥1 周、准入阈值：净效应>0、PSI<0.1、错配率<0.1%、ECE<3%、bar 连续性≥99.9%）并在 `execution/switch_policy.yaml` 中固化，明确回滚触发（成本溢出>2σ、PSI>0.3、红灯告警）。
+  2) 实现双源状态路由与健康检测，异常时自动退回轨 A，并将阈值与健康指标写入 `switch_policy.yaml`。
+  3) 记录切换/回滚审计日志，定期回放验证决策一致性，并保留金丝雀演练报告（收益/滑点/换手/状态持久度）。
+- **DoD**：热切换演练通过；切换/回滚日志完整；`execution/switch_policy.yaml` 记录观察期、准入阈值与回滚触发；满足净效应>0、PSI<0.1、错配率<0.1%、ECE<3%、bar 连续性≥99.9% 方可切换；回滚后策略可恢复稳定；执行层接口兼容 V5。
 - **负责人**：执行工程｜**优先级**：P0｜**依赖**：603,118,405｜**工时**：M
 - **风险&缓解**：高频状态不稳定→设置观察期与分级降级策略；执行接口差异→提供模拟回放与接口适配层。
 - **落盘路径**：`execution/`、`logs/switch_audit/`
@@ -789,14 +808,14 @@
 ### 卡片 808
 - **模块**：监控
 - **标题**：数据质量与健康度日报
-- **目标**：连续性/缺失/漂移/IO/延迟/报错闭环指标日报，形成统一健康面板。
+- **目标**：连续性/缺失/漂移/IO/延迟/报错闭环指标日报，分慢性劣化与急性故障两级健康面板。
 - **输入**：`preprocessing/align/index.parquet`、校准报告、数据管线日志
 - **输出**：`results/qc/date=YYYY-MM-DD/` 指标文件与 `qc_summary.md`
 - **关键步骤**：
-  1) 聚合连续性、缺失率、对齐一致率、PSI/KS/ECE、IO 吞吐与延迟等指标；
-  2) 渲染日报模板，包含告警阈值、历史对比、缺口补救状态；
-  3) 与告警系统集成，异常触发回补/重跑任务并记录闭环。
-- **DoD**：日报在 T+1 10:00 前自动生成；异常有告警与补救记录；指标可追溯至原始数据切片。
+  1) 聚合连续性、缺失率、对齐一致率、PSI/KS/ECE、IO 吞吐与延迟等指标，并区分慢性劣化（趋势检验：线性回归斜率显著性 p<0.05 或 Mann–Kendall）与急性故障（近 N=1440 根 1m bars 内 p99/p999 阈值连续命中）。
+  2) 渲染日报模板，包含告警阈值、历史对比、缺口补救状态，输出 `qc_summary.md`（黄/红信号）。
+  3) 与告警系统集成，异常触发回补/重跑任务并记录闭环，每次告警须关联工单并可追溯补救动作。
+- **DoD**：日报在 T+1 10:00 前自动生成；慢性劣化与急性故障均可追溯到回补/重跑工单；指标可追溯至原始数据切片；`qc_summary.md` 标注黄/红等级并记录趋势/阈值命中依据。
 - **负责人**：DevOps｜**优先级**：P0｜**依赖**：115,116,118,803｜**工时**：M
 - **风险&缓解**：指标口径不一致→统一配置中心；数据延迟→引入缓冲 + 重跑机制；告警噪声→阈值动态调优。
 - **落盘路径**：`results/qc/`
@@ -859,6 +878,20 @@
 - **关键步骤**：数据流图、接口表；统计方法与结果；版本演进。
 - **DoD**：审计通过；外部评审可读。
 - **负责人**：量化研究/策略/DevOps｜**优先级**：P1｜**依赖**：核心模块完成｜**工时**：M
+
+### 卡片 863
+- **模块**：文档/合规
+- **标题**：合规、可追溯与发布绑定文档
+- **目标**：固化数据用途/保留期/再分发限制、卡片→脚本→产物索引与 release 签名，缺失即 Gate 阻断。
+- **输入**：任务卡片、manifest/calibration 产出、CI/发布流程
+- **输出**：`COMPLIANCE.md`、`docs/traceability.md`、`releases/release.yml`
+- **关键步骤**：
+  1) 在 `COMPLIANCE.md` 中写明数据用途、最少保留期、脱敏策略及再分发限制分级（内部/外部/开源），并为 CI 编写“文件存在+关键段落关键字”检查。
+  2) 生成 `docs/traceability.md`，按“卡片→脚本→产物→报告”四段索引，关联 manifest、calibration、验证报告及 release。
+  3) 创建 `releases/release.yml`，绑定 `data_manifest_hash`、`calibration_hash`、`model_artifact_id`，记录影子模型与一周金丝雀窗口，缺失签名或 `COMPLIANCE.md` 即 Gate 阻断。
+- **DoD**：任意 release 可依据 `releases/release.yml`、`docs/traceability.md` 与 `COMPLIANCE.md` 完整恢复；CI 存在关键文档与关键字检查；签名不一致或缺失合规文档时自动阻断发布。
+- **负责人**：DevOps/合规｜**优先级**：P0｜**依赖**：109-118,403-406｜**工时**：M
+- **风险&缓解**：合规口径变化→建立版本历史；签名校验失败→自动通知并回滚。
 
 ---
 
