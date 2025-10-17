@@ -1,4 +1,8 @@
-import json, os, random, numpy as np
+import json
+import os
+import random
+
+import numpy as np
 
 def set_seed(seed: int = None):
     if seed is None:

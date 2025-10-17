@@ -18,6 +18,15 @@ jobs:
         run: pip install poetry
       - name: Install dependencies
         run: poetry install --with dev
+      - name: check_compliance
+        shell: bash
+        run: |
+          set -e
+          test -f COMPLIANCE.md || { echo "COMPLIANCE.md missing"; exit 1; }
+          grep -qiE '用途|usage' COMPLIANCE.md || { echo "缺少 用途/usage"; exit 1; }
+          grep -qiE '保留期|retention' COMPLIANCE.md || { echo "缺少 保留期/retention"; exit 1; }
+          grep -qiE '再分发|redistribution' COMPLIANCE.md || { echo "缺少 再分发/redistribution"; exit 1; }
+          grep -qiE '脱敏|anonymi|mask' COMPLIANCE.md || { echo "缺少 脱敏/anonymization"; exit 1; }
       - name: Run lint suite
         run: make lint
       - name: Run tests
@@ -26,3 +35,6 @@ jobs:
         run: poetry run python validation/src/precheck_costs.py
       - name: Signature gate
         run: poetry run python validation/src/validate_outputs.py
+      - name: validate_results_schemas
+        if: ${{ hashFiles('results/merge_metrics.json') != '' || hashFiles('results/calibration_profile.json') != '' }}
+        run: poetry run python validation/src/validate_results_schemas.py
