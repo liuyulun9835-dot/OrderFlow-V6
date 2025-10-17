@@ -1,0 +1,9 @@
+src,dst
+preprocessing,data
+atas_integration,data/atas_integration
+models,model
+strategy_core,decision
+execution,execution
+validation,QA_validation
+results,REPORT_results
+docs,docs

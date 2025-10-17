@@ -1,0 +1,4 @@
+validator:
+  fdr_alpha: 0.10
+  embargo_bars: 5
+  cost_gate: { base: true, plus50pct: true, x2: true }

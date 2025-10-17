@@ -1,0 +1,6 @@
+ab_switch:
+  canary: true
+  shadow: true
+  rollback_on:
+    - calibration_mismatch
+    - cost_breach

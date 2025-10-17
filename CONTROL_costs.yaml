@@ -1,0 +1,3 @@
+cost_gate:
+  scenarios: [base, plus50pct, x2]
+  rule: any_negative_blocks_release: true

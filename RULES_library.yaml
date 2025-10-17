@@ -1,0 +1,3 @@
+rules:
+  - name: example_rule
+    expr: "MFI>pctl(70) and state in {trend_up}"

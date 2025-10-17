@@ -1,911 +1,7467 @@
-# OrderFlow V6 — 任务卡片库（完整版 · 不省略）
-
-> **修订说明（v1.1）**
-> - 保留 v1.0 全量内容，在原卡片基础上补充 v1.1 注释与训练数据口径要求。
-> - 新增卡片 109/110（数据分层&水位）与 312（增量训练 Warm-Start），并导出 docs 副本。
-
-> 结构：**卡片化任务**（可直接拷贝到 Jira/飞书项目）。每张卡含：ID｜模块｜标题｜目标｜输入｜输出｜关键步骤｜DoD（验收）｜负责人｜优先级｜依赖｜工时估算｜风险&缓解｜落盘路径｜QA/工具。
->
-> **状态枚举**：`Pending / In‑Progress / Review / Blocked / Done`  
-> **优先级**：`P0(立即)/P1(高)/P2(中)/P3(低)`
-
----
-
-## 索引
-- **000–049** 基线与工程环境  
-- **100–199** 数据层（ATAS/行情/桥接/质控）  
-- **200–299** 指标层（MSI/MFI/KLI/派生）  
-- **300–399** 状态建模（HMM/TVTP/HSMM）  
-- **400–499** Validator v2（统计显著性闭环）  
-- **500–599** 规则库 A/B/C/D（20 条白名单）  
-- **600–649** 决策引擎（StructuredDecisionTree）  
-- **650–699** 风险管理  
-- **700–749** 订单执行
-- **750–799** 回测与模拟盘
-- **800–829** 监控与可视化
-- **830–859** 部署与运维
-- **860–899** 文档与审计
-- **900–949** 里程碑验收
-
-> **新增/强化卡片导引**：
-> - 111｜数据｜ATAS Bar 聚合获取（≤3 个月）
-> - 112｜数据｜ATAS 真 Tick 连续抓取（7 天滚动）
-> - 115｜数据合并｜对齐索引与声明式合并
-> - 116｜映射/校准｜minute↔tick 特征映射与分布校准
-> - 118｜可执行性预检｜成本鲁棒与成交可达性闸门
-> - 607｜执行｜AB 双源热切换
-> - 808｜监控｜数据质量与健康度日报
-
----
-
-## 000–049 基线与工程环境
-
-### 卡片 000
-**【V1.1注释】**
-- 环境基线需兼容新增数据分层（raw/staged/processed）目录结构，并同步更新 `Makefile`/CI 任务。
-- Docker/Poetry 镜像需锁定与训练流水线一致的 Python 版本，避免 manifest 重放出现依赖偏差。
-- `make quickstart` 须覆盖 docs 副本导出检查，保证仓库初始化即能找到 v1.1 卡片库。
-- **模块**：工程基线
-- **标题**：仓库结构统一 & 环境基线
-- **目标**：一条命令拉起项目；目录结构与命名与 V5/V6 说明书一致。
-- **输入**：现有仓库、V6 说明书、V5 执行/校验手册
-- **输出**：`pyproject.toml`、`Dockerfile`、目录树、`Makefile`/`invoke`
-- **关键步骤**：
-  1) 建立目录：`atas_integration/indicators|data_bridge`、`preprocessing`、`validation/{configs,src,out}`、`strategy_core/{decision_tree,state_inference}`、`execution`、`scripts`、`models`、`results`、`logs`。
-  2) Poetry 环境与锁定依赖；Python 版本固定。
-  3) Pre-commit（ruff/black/isort/mypy）与 CI Job（lint+pytest）。
-  4) `.env.example` + 机密加载（dotenv）。
-- **DoD**：`poetry install` 通过；`pytest -q` 通过；`make quickstart` 成功。
-- **负责人**：DevOps｜**优先级**：P0｜**依赖**：无｜**工时**：M
-- **风险&缓解**：跨平台差异→Docker 基线；Poetry 镜像源。
-- **落盘路径**：根目录；`.github/workflows/ci.yml`
-- **QA/工具**：ruff/mypy/pytest/coverage
-
-### 卡片 001
-**【V1.1注释】**
-- 实验追踪需记录数据 manifest/watermark 版本号，确保回放到指定日分区可重现指标。
-- 在模型/结果命名规则中补充对初始包与增量包来源的引用字段，便于训练数据审计。
-- README 应标记 docs v1.1 副本路径及与主文档的版本同步机制。
-- **模块**：工程基线
-- **标题**：实验追踪与版本管理
-- **目标**：结果可复现、模型可回滚。
-- **输入**：Git、`results/`、`models/`
-- **输出**：`git tag` 规范、`models/*` 命名规范、`results/README.md`
-- **关键步骤**：tag 语义化；模型与结果文件命名规则；随机种子记录脚本。
-- **DoD**：任一实验均可按 README 指示重跑并复现关键数值。
-- **负责人**：DevOps｜**优先级**：P1｜**依赖**：000｜**工时**：S
-
----
-
-## 100–199 数据层（ATAS/行情/桥接/质控）
-
-### 卡片 101
-**【V1.1注释】**
-- DLL 导出需追加导出批次元数据（exporter 版本/时区）写入 manifest，供水位追踪使用。
-- `latest.json` 需保证与日分区文件同结构，方便 warm-start 读取最近窗口。
-- 导出脚本与 ATAS 配置应在 docs v1.1 中提供截图/版本号，便于审核。
-**【V1.1补充-训练数据口径】**
-- **初始包**：覆盖不少于 60 连续自然日，包含完整 `market_data_YYYYMMDD.json` 与伴随 `initial.json` manifest。
-- **增量包**：按日生成 `update_YYYYMMDD.json`，仅包含新增日分区及水位；落地须引用对应 exporter 版本号。
-- **QC**：抽样校验字段完整率≥99.9%，如失败需重跑；每批次需产出导出日志与签名。
-- **模块**：数据
-- **标题**：ATAS 指标导出 DLL 编译与加载
-- **目标**：回放+实时导出 1m 粒度订单流 JSON。
-- **输入**：C# 指标源码、ATAS 环境
-- **输出**：`SimplifiedDataExporter.dll`、导出配置截图
-- **关键步骤**：编译 DLL → ATAS 加载 → OnCalculate 写 `market_data_*.json` & `latest.json`。
-- **DoD**：抽样 3 天 JSON 字段完整、时间连续、与图形方向一致。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：000｜**工时**：M
-
-### 卡片 102
-**【V1.1注释】**
-- 批量导出脚本需与 manifest 生成器耦合，记录每个回放文件的源窗口及重试次数。
-- 建议引入分层目录（symbol/year-month/day）输出，便于后续日分区重算。
-- 日志需保留水印时间戳与回放机房，支持质控追责。
-- **模块**：数据
-- **标题**：Replay 批量导出批处理
-- **目标**：覆盖牛/熊/震荡三个阶段的长期样本。
-- **输入**：ATAS 回放列表
-- **输出**：`data/atas/{SYMBOL}/{YYYYMM}/market_data_YYYYMMDD.json`
-- **关键步骤**：回放脚本化；错误重试；文件校验与日志。
-- **DoD**：缺失率<0.1%；所有日期均有产出。
-- **负责人**：数据工程｜**优先级**：P1｜**依赖**：101｜**工时**：M
-
-### 卡片 103
-**【V1.1注释】**
-- Schema 冻结需同步生成版本号，写入 manifest `schema_version` 字段。
-- 对新增字段必须提供向后兼容策略，避免旧分区在质控时失败。
-- Schema 校验脚本需纳入 CI，确保增量包合入前自动验证。
-- **模块**：数据
-- **标题**：ATAS JSON Schema 冻结
-- **目标**：字段与类型稳定，供下游对齐。
-- **输入**：导出样例
-- **输出**：`preprocessing/schemas/atas_schema.json`
-- **关键步骤**：字段列举与类型定义；可选/必选标注；Schema 校验脚本。
-- **DoD**：任一 JSON 通过 Schema 校验；变更需走变更单。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：101｜**工时**：S
-
-### 卡片 104
-**【V1.1注释】**
-- 行情采集需与 ATAS 数据按 UTC 分钟对齐，产出 `processed` 层 join 时无偏差。
-- 建议在落盘时写入 `partition_date` 列，方便后续日分区切分及重算。
-- 对接新的水位方案，需在采集日志中标注 last_trade_id/close_time。
-**【V1.1补充-训练数据口径】**
-- **初始包**：覆盖不少于 90 连续自然日的 1m K 线，落盘为日分区 parquet，并生成 `initial.json` 清单。
-- **增量包**：每日补充 `update_YYYYMMDD.parquet`，并在 manifest 中记录缺口重算情况；禁止跨日拼接写入。
-- **QC**：对齐 ATAS 分钟索引后缺失率须≤0.1%，若超阈值需回溯补抓并记录原因。
-- **模块**：数据
-- **标题**：交易所 1m K 线采集与落盘
-- **目标**：最小可用行情集（Binance/OKX）
-- **输入**：交易所 API
-- **输出**：`data/exchange/{SYMBOL}/kline_1m.parquet`
-- **关键步骤**：拉取、去重、缺失补齐、时区统一。
-- **DoD**：时间对齐成功；空洞率<0.1%。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：000｜**工时**：M
-
-### 卡片 105
-- **模块**：数据
-- **标题**：成本字典（手续费/点差/滑点）
-- **目标**：三档成本配置（base/+50%/×2）。
-- **输入**：交易费用表
-- **输出**：`validation/configs/costs.yaml`
-- **关键步骤**：抽象品种/账户级参数；校验与生效测试。
-- **DoD**：回测/验证可一键切换成本档。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：104｜**工时**：S
-
-### 卡片 106
-**【V1.1注释】**
-- 会话定义需输出至 manifest，供增量训练按会话分割窗口。
-- 节假日更新需走变更单并同步更新所有分区的 `session_id` 衍生缓存。
-- 单元测试需覆盖日分区跨界场景，验证 warm-start 时段切换稳定。
-- **模块**：数据
-- **标题**：交易会话与节假日日历
-- **目标**：生成 `session_id`，避免跨会话泄漏。
-- **输入**：交易所交易时段、节假日
-- **输出**：`data/meta/sessions.csv`
-- **关键步骤**：规则编码；与 ATAS 会话对齐；单元测试。
-- **DoD**：任意时间戳映射唯一会话；边界测试通过。
-- **负责人**：数据工程｜**优先级**：P2｜**依赖**：104｜**工时**：S
-
-### 卡片 107
-**【V1.1注释】**
-- ATAS 时间戳须先按本地时区解读，再转换为 UTC，并对 `timestamp` 执行 `floor('min')` 以统一粒度。
-- 同一分钟若存在重复记录仅保留末条，确保合并后指标不回溯；日志需记录剔除数量。
-- `merge_asof` 必须设定最近邻容差≥45s，超出容差的分钟需标记缺失触发 QC。
-- 提供可选 `--offset-minutes` 参数，支持对齐不同交易所的延迟；默认 0。
-- 严禁使用 `ffill`/`fillna(0)` 静默补零，缺失需通过数据补抓或特征回填逻辑显式处理。
-**【V1.1补充-训练数据口径】**
-- **初始包**：按日生成 `processed` 分区，涵盖至少 45 连续交易日的特征数据及 `initial.json` manifest；需包含字段统计摘要。
-- **增量包**：每日追加 `processed/date=YYYY-MM-DD/` 分区，manifest 记录源数据包版本、水位与缺失分钟列表。
-- **QC**：桥接输出需对齐行情与 ATAS 分钟数一致，缺失分钟率≤0.05%；校验失败禁止进入训练流水线。
-- **模块**：数据
-- **标题**：数据桥（JSON→Features Parquet）
-- **目标**：合并 ATAS+行情，禁止未来函数。
-- **输入**：101–106 产出
-- **输出**：`data/processed/features.parquet`
-- **关键步骤**：键对齐；滚动计算；时序校验；写 Parquet。
-- **DoD**：`validate_required_fields.py` 0 错误；尺寸与期望一致。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：101,104,105,106｜**工时**：M
-
-### 卡片 108
-**【V1.1注释】**
-- 日报需新增 manifest 比对项（覆盖率/水位/Schema 版本）并在异常时触发重算流程。
-- 质控结果需回写至 `results/data_qc_report.md` 及日分区元数据，形成追踪闭环。
-- 报警渠道需支持增量触发，只推送新增失败分区以降低噪音。
-**【V1.1补充-训练数据口径】**
-- **初始包**：QC 报告需覆盖全部初始日分区，并生成验收结论表（通过/需重跑）。
-- **增量包**：每日 QC 记录与 `update_*.json` 对齐，存档在 `results/qc/date=YYYY-MM-DD/`。
-- **QC**：质控脚本需验证特征数一致、缺失率阈值、时间连续性；所有指标通过方可标记数据可用于训练/回测。
-- **模块**：数据
-- **标题**：数据完整性与异常检测
-- **目标**：自动质控日报。
-- **输入**：features.parquet
-- **输出**：`results/data_qc_report.md`
-- **关键步骤**：缺失、异常峰值、重复、时间跳变检测；邮件/IM 提醒。
-- **DoD**：日报生成且无阻塞项。
-- **负责人**：数据工程｜**优先级**：P1｜**依赖**：107｜**工时**：S
-
-### 卡片 109
-- **模块**：数据
-- **标题**：数据分层与分区（raw → staged → processed）
-- **目标**：建立分层目录结构，支持按日分区存取与重算。
-- **输入**：ATAS 导出、行情数据、桥接配置
-- **输出**：`data/{raw,staged,processed}/symbol/date=YYYY-MM-DD/` 分区、分层字典、`manifest/*.json` 水位快照、`results/manifest_hash.txt`
-- **关键步骤**：
-  1) 定义分层规范与元数据字段（生成时间、来源包、schema 版本）。
-  2) 实现分区写入策略，保障日粒度重算覆盖上下游。
--  3) 编写回填/重算脚本，支持单日回滚并重建所有层。
-  4) 计算并落盘 `manifest/*.json` 的 SHA256 内容哈希，写入 `results/manifest_hash.txt`，并在 `results/qc_summary.md` 中回填 `data_manifest_hash` 字段。
-- **约束**：116/117 强依赖 manifest；缺失即拒跑。
-- **DoD**：任一指定日期可在 30 分钟内完成全量重算；训练/验证流程可直接消费日分区；任一训练日可按哈希精确还原到切片。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：101-108｜**工时**：M
-
-### 卡片 110
-- **模块**：数据
-- **标题**：数据清单与水位（manifest & watermark）
-- **目标**：生成初始与增量 manifest，记录覆盖范围、水位与 schema 版本。
-- **输入**：分层分区元数据、导出日志
-- **输出**：`initial.json`、`update_YYYYMMDD.json`、水位对照表、`manifest/lineage/*.json`、`results/manifest_hash.txt`
-- **关键步骤**：
-  1) 设计 manifest 结构，包含时间窗口、覆盖率、schema/exporter 版本、水位时间戳、`source_ranges`、`schema_signature`、`exporter_meta`、`lineage` 字段。
-  2) 集成到流水线，在初始/增量产出后自动写入 manifest 并校验，同时为全部 manifest 文件计算基于文件内容的 SHA256 哈希并更新 `results/manifest_hash.txt` 与 `results/qc_summary.md` 中的 `data_manifest_hash`。
-  3) 提供 manifest 校验工具，供训练/回测按 manifest 复现数据切片，缺失或哈希不一致时拒绝进入 116/117。
-- **约束**：116/117 强依赖 manifest；缺失或哈希缺失即拒跑。
-- **DoD**：训练/回测可按 manifest 精确复现输入；水位对外可追溯，缺失项有报警；任一 manifest 可通过 `results/manifest_hash.txt` 的 SHA256 内容哈希在任一训练日精准还原到切片。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：109｜**工时**：M
-
-### 卡片 111
-- **模块**：数据
-- **标题**：ATAS Bar 聚合获取（≤3 个月）
-- **目标**：规范导出 `latest+切片`、统一分辨率/时区、生成分区 manifest，缺失率<0.1%。
-- **输入**：ATAS 回放/实时导出、分层目录规范
-- **输出**：`data/raw/atas/bar/{symbol}/resolution={X}/date=YYYY-MM-DD/*.json`、`export_manifest.json`、`data/raw/atas/error_ledger.csv`
-- **关键步骤**：
-  1) 设计多分辨率导出配置（1m/5m/100–1000 tick）并固化 `latest.json` 与日分区结构，导出端写入 `window_id`、`flush_seq`。
-  2) 统一 UTC 时区与分钟级右闭左开边界（回放边界按分钟右闭左开，close 时刻落桶），生成分区级 metadata（exporter/schema 版本、覆盖窗口、缺失率）。
-  3) 集成 schema 校验与连续性扫描，产出 `bar_continuity_report.md` 并写入 manifest，同时维护 `data/raw/atas/error_ledger.csv` 记录断连/补抓/重复段。
-- **DoD**：Schema 校验通过；`bar_continuity_report.md` 连续性≥99.9%；缺失率<0.1%；`tick_quality_report.md` 对应统计到达间隔 CV≤1.5、p99≤3×median，指标不达标需标红并禁止进入 116。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：101,102,109｜**工时**：M
-- **风险&缓解**：ATAS 导出窗口受限→分批导出 + manifest 记录缺口；导出脚本异常→加入重试与告警。
-- **落盘路径**：`data/raw/atas/bar/`
-- **QA/工具**：Python/PySpark、Great Expectations、`scripts/batch_replay.{sh,bat}`
-
-### 卡片 112
-- **模块**：数据
-- **标题**：ATAS 真 Tick 连续抓取（7 天滚动）
-- **目标**：近窗完整采集、超窗归档（JSON→Parquet）、生成质量日报。
-- **输入**：ATAS 实时导出、存储水位、压缩策略
-- **输出**：`data/raw/atas/tick/{symbol}/date=YYYY-MM-DD/*.{json,parquet}`、`tick_quality_report.md`
-- **关键步骤**：
-  1) 配置高 IOPS 存储目录与滚动写入策略，确保 7 天窗口内逐笔无丢失，并在元数据中固化 UTC、右闭左开分钟桶及 `window_id`、`flush_seq`；
-  2) 实现 JSON→Parquet 压缩归档与索引（按日期/时段分区），生成缺口补抓脚本并将断连/补抓/重复段同步写入 `data/raw/atas/error_ledger.csv`；
-  3) 生成每日质量日报（缺失率、吞吐、压缩比、重试情况）并推送，附带到达间隔 CV、IQR、p99 指标。
-- **DoD**：7×24h 窗口连续；缺口补抓记录完整；日报准时生成；到达间隔 CV≤1.5、p99≤3×median，未达标条目需标红且阻断进入 116。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：101,109｜**工时**：M
-- **风险&缓解**：IO 峰值导致写入失败→预留缓存队列 + 分区限流；ATAS 断连→监控重连与补抓任务。
-- **落盘路径**：`data/raw/atas/tick/`
-- **QA/工具**：Python/Polars、AzCopy/Rclone、`validation/src/qc_report.py`
-
-### 卡片 115
-- **模块**：数据合并
-- **标题**：对齐索引与声明式合并
-- **目标**：建立分钟粒度“可用源/缺失掩码/质量标记”对齐索引表，统一合并入口。
-- **输入**：ATAS Bar/Tick 数据、Binance K 线、manifest 与水位
-- **输出**：`preprocessing/align/index.parquet`、`preprocessing/configs/merge.yaml`
-- **关键步骤**：
-  1) 生成 UTC、右闭左开边界的标准分钟索引，记录各来源可用性与缺失掩码；
-  2) 在 `merge.yaml` 中声明来源优先级/降级策略（Tick>ATAS Bar>Binance）与准入阈值；
-  3) 编写自动化合并脚本，输出质量标记（缺失、插值、降级来源）并生成对齐一致率报告。
-- **DoD**：索引覆盖连续窗口；质量标记完整；一键生成多源合并样表。
-- **负责人**：数据工程｜**优先级**：P0｜**依赖**：111,112,104,110｜**工时**：M
-- **风险&缓解**：时间边界不一致→UTC 统一 + 单元测试覆盖；多源字段差异→配置化映射与校验。
-- **落盘路径**：`preprocessing/align/`、`preprocessing/configs/`
-- **QA/工具**：Pandas/Polars、Great Expectations、`validation/src/validate_json.py`
-
-### 卡片 116
-- **模块**：映射/校准
-- **标题**：minute↔tick 特征映射与分布校准
-- **目标**：同名因子均值/方差校准、PSI/KS 漂移监控，产出映射与校准报告。
-- **输入**：`index.parquet`、合并后特征、ATAS Tick 特征
-- **输出**：`mapping_tick2bar.pkl`、`calibration_profile.json`（含分层曲线与越线段）、`results/merge_and_calibration_report.md`
-- **关键步骤**：
-  1) 在重叠窗口对 minute 与 tick 特征进行聚合与对齐，按波动/成交四分位进行分层 Quantile Mapping，构建映射函数与补偿项。
-  2) 对每一分层计算 PSI/KS/ECE，并要求 PSI<0.2、KS-p>0.05、ECE<3%，任一越线段即标记为不可合并并触发 118 的降级流程。
-  3) 生成校准配置与报告，固化再现步骤与阈值，报告中需包含 offset 曲线、错配率<0.1%、错配合并率定义（被 tolerance 吸附且跨分钟的记录占比）以及整点±1s 边界用例截图。
-- **DoD**：映射/校准脚本可重现；`calibration_profile.json` 记录分层曲线与越线段；报告包含 PSI/KS/ECE 指标、错配率<0.1%、边界截图，并对越线段写入降级白名单；任一分层越线→不可合并并进入 118 的降级流程。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：115,112｜**工时**：M
-- **风险&缓解**：重叠窗口不足→延长采集期 + 引入回放补齐；特征漂移剧烈→引入 HSMM 黏性与再校准计划。
-- **落盘路径**：`results/`、`preprocessing/align/`
-- **QA/工具**：Python/Scikit-learn、PSI/KS 工具包、`results/merge_and_calibration_report.md` 模板
-
-### 卡片 117
-- **模块**：映射/校准
-- **标题**：分层映射审计与不可合并段管理
-- **目标**：将分层 Quantile Mapping 的越线段固化为降级白名单，确保 minute↔tick 合并可追溯。
-- **输入**：`calibration_profile.json`、`results/merge_and_calibration_report.md`
-- **输出**：更新后的 `calibration_profile.json`（含降级段列表与 `calibration_hash`）、`results/merge_and_calibration_report.md`（含不可合并段索引）
-- **关键步骤**：
-  1) 依据 116 产出的分层 PSI/KS/ECE 指标，自动识别越线段并写入不可合并标记。
-  2) 将越线段加入降级白名单（供 118 使用），并输出 `calibration_hash` 以供后续签名。
-  3) 在报告中记录降级原因、补救建议与影响窗口，更新 `results/qc_summary.md` 以暴露不可合并段状态。
-- **DoD**：不可合并段均被标记并与 118 降级流程联动；`calibration_profile.json` 写入降级白名单与 `calibration_hash`；报告列出越线指标、补救路径与签名信息。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：116｜**工时**：S
-- **风险&缓解**：降级段过多→与数据组联动补抓或重算；哈希签名不一致→复核 109/110 manifest 产出。
-- **落盘路径**：`results/`
-- **QA/工具**：PSI/KS/ECE 扫描脚本、`results/qc_summary.md`
-
-### 卡片 118
-- **模块**：验证预检
-- **标题**：成本鲁棒与成交可达性闸门
-- **目标**：在进入 Validator v2 前完成 base/+50%/×2 成本与成交可达性预估，不达标不入主流程。
-- **输入**：`mapping_tick2bar.pkl`、`calibration_profile.json`、`validation/configs/costs.yaml`
-- **输出**：`validation/precheck/costs_gate.md`、`validation/configs/priority_downgrade.yaml`
-- **关键步骤**：
-  1) 构建分钟/逐笔级成交量覆盖与冲击惩罚估计，评估 base/+50%/×2 成本下的可执行性，硬编码右闭左开窗口并在 `labels.parquet` 元数据写入 `label_lag`/`lookahead`/`priority_source`。
-  2) 建立预检脚本，生成可执行性评分、成本敏感性曲线与准入判定，tick 缺口或 116/117 校准越线时通过 `validation/configs/priority_downgrade.yaml` 自动降级到 bar 标签并写日志。
-  3) 将预检结果写入文档与管线检查点，显式输出 `embargo_bars`（如 5）与 `purge_kfold` 参数，未通过时阻断 Validator v2 流程并触发补救任务。
-- **DoD**：预检脚本自动化；文档列出准入阈值、降级策略与补救路径；未通过案例可复现阻断行为；降级行为可追溯且可复现（含 `priority_downgrade.yaml`、日志、`labels.parquet` 元数据、`embargo_bars`/`purge_kfold` 配置）。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：116,105｜**工时**：S
-- **风险&缓解**：成交数据偏差→引入冗余来源与置信区间；预估模型过拟合→留出独立窗口验证。
-- **落盘路径**：`validation/precheck/`
-- **QA/工具**：Python/NumPy、敏感性仿真脚本、CI 集成测试
-
----
-
-## 200–299 指标层（MSI/MFI/KLI/派生）
-
-### 卡片 201
-- **模块**：指标
-- **标题**：指标字典与命名统一
-- **目标**：统一字段（MSI/MFI/KLI/位置/时段/状态）。
-- **输入**：V5/V6 文档、示例数据
-- **输出**：`preprocessing/dicts/indicator_dict.yaml`
-- **关键步骤**：字段列表、描述、计算口径、单位；对齐下游使用点。
-- **DoD**：任一模块仅通过字典即可解析含义。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：107｜**工时**：S
-
-### 卡片 202
-- **模块**：指标
-- **标题**：MSI 计算（结构/价值迁移）
-- **目标**：VA 接近度、POC 迁移速度/一致性。
-- **输入**：ATAS 字段
-- **输出**：`value_migration{,_speed,_consistency}`, `near_val/vah/poc`
-- **关键步骤**：窗口化迁移；一致性=方向连续度；边界防抖。
-- **DoD**：样图对齐；无 NaN；单元测试覆盖边界。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：107｜**工时**：M
-
-### 卡片 203
-- **模块**：指标
-- **标题**：MFI 计算（CVD/失衡/派生）
-- **目标**：CVD、EMA、MACD、RSI、z-score、imbalance。
-- **输入**：bar_delta/成交
-- **输出**：`cvd, cvd_ema_{fast,slow}, cvd_macd, cvd_rsi, cvd_z, imbalance`
-- **关键步骤**：去噪；稳定性测试；极值裁剪（winsorize）。
-- **DoD**：极端日稳定；单元测试通过。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：107｜**工时**：M
-
-### 卡片 204
-- **模块**：指标
-- **标题**：KLI 计算（吸收/LVN/HVN/关键位）
-- **目标**：吸收强度与方向、结构位邻近。
-- **输入**：ATAS 体积分布
-- **输出**：`absorption_detected/strength/side, nearest_{lvn,hvn,support,resistance}, in_lvn`
-- **关键步骤**：聚类/阈值检测；假信号过滤；回测 spot-check。
-- **DoD**：样例通过；阈值敏感性合理。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：107｜**工时**：M
-
-### 卡片 205
-- **模块**：指标
-- **标题**：相变前兆/派生特征
-- **目标**：`H, ret_var, ret_acf1, cvd_skew/kurt, migration_accel`。
-- **输入**：features.parquet
-- **输出**：对应字段 + 评分子模块
-- **关键步骤**：窗口长度试验；相关性与可解释性检验。
-- **DoD**：与状态切换存在先行/同步关系的统计证据。
-- **负责人**：量化研究｜**优先级**：P2｜**依赖**：107｜**工时**：M
-
-### 卡片 206
-- **模块**：指标
-- **标题**：指标质控可视化
-- **目标**：Sanity Check Notebook。
-- **输入**：指标表
-- **输出**：`notebooks/indicator_sanity_checks.ipynb`
-- **关键步骤**：样图：突破/回抽/吸收/区间；方向一致性。
-- **DoD**：人工检视通过；结论记录。
-- **负责人**：量化研究｜**优先级**：P2｜**依赖**：202–205｜**工时**：S
-
----
-
-## 300–399 状态建模（HMM/TVTP/HSMM）
-
-### 卡片 301
-- **模块**：状态
-- **标题**：训练集构建（Purged K-Fold）
-- **目标**：避免泄漏的训练/验证切分。
-- **输入**：特征表、会话日历
-- **输出**：折叠索引、embargo 配置
-- **关键步骤**：k=5，embargo=5 bars；时间窗滚动。
-- **DoD**：每折时间无重叠；元信息可复现。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：107,106｜**工时**：S
-
-### 卡片 302
-- **模块**：状态
-- **标题**：GaussianHMM 训练与选型
-- **目标**：2–4 状态候选，AIC/BIC+经济意义评估。
-- **输入**：X_t
-- **输出**：`models/market_regime_hmm.pkl`、`hmm_meta.json`
-- **关键步骤**：初始化敏感性；随机种子；多起点拟合。
-- **DoD**：状态可解释；趋势态黏性>阈值。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：301｜**工时**：M
-
-### 卡片 303
-- **模块**：状态
-- **标题**：TVTP-HMM/分组转移矩阵
-- **目标**：转移概率随 `Z_t` 变化（或高低波分组近似）。
-- **输入**：Z_t
-- **输出**：TVTP 模型/双矩阵模型
-- **关键步骤**：逻辑回归参数稳定性；对比基础 HMM。
-- **DoD**：样本外改进显著或等效且可解释。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：302｜**工时**：M
-
-### 卡片 304
-- **模块**：状态
-- **标题**：HSMM 黏性约束
-- **目标**：最小持续时间，减少“横跳”。
-- **输入**：X_t
-- **输出**：HSMM 模型 & 参数
-- **关键步骤**：持续时间分布拟合；阈值选择。
-- **DoD**：转移抖动显著降低，滞后可接受。
-- **负责人**：量化研究｜**优先级**：P2｜**依赖**：302｜**工时**：M
-
-### 卡片 305
-- **模块**：状态
-- **标题**：状态推断服务化
-- **目标**：`predict_proba(snapshot)->(state_tag,confidence)`。
-- **输入**：features row
-- **输出**：`strategy_core/state_inference.py`
-- **关键步骤**：序列缓存；缺失容错；版本标记。
-- **DoD**：ms 级响应；接口稳定；单测覆盖。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：302｜**工时**：M
-
-### 卡片 306
-- **模块**：状态
-- **标题**：跨年份稳定性与漂移检测
-- **目标**：不同年份状态分布一致性。
-- **输入**：历史多段
-- **输出**：稳定性报告
-- **关键步骤**：KS/PSI；切片对比；漂移告警阈值。
-- **DoD**：稳定性≥阈值；改动留痕。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：305｜**工时**：S
-
-### 卡片 312
-- **模块**：状态
-- **标题**：增量训练（Warm-Start）
-- **目标**：利用 processed 分区与 manifest 实现模型增量更新与重训触发。
-- **输入**：`data/processed/date=*` 分区、`manifest/*.json`
-- **输出**：增量训练脚本、耗时/稳定性指标、漂移监控阈值
-- **关键步骤**：
-  1) 设计 warm-start 训练流程，按 manifest 读取新增分区并接续历史权重。
-  2) 定义漂移检测指标（PSI/KS/收益退化）与重训触发阈值，并记录在配置中。
-  3) 编排耗时与资源监控，确保在既定窗口内完成训练；异常时自动回退全量重训。
-- **DoD**：增量训练耗时<全量 40%，稳定性指标无显著劣化；漂移监控与阈值在 docs/manifest 中固化。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：109,110,302｜**工时**：M
-
----
-
-## 400–499 Validator v2（统计显著性闭环）
-
-### 卡片 401
-- **模块**：验证
-- **标题**：Validator 配置与目录固化
-- **目标**：标准化 `validation/{configs,src,out}`。
-- **输入**：模板
-- **输出**：`configs/validator_v2.yaml`
-- **关键步骤**：窗长、horizons、过滤条件、FDR α、稳定性窗。
-- **DoD**：一键运行产出完整结果。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：201,107,118｜**工时**：S
-
-### 卡片 402
-- **模块**：验证
-- **标题**：标签体系与元信号
-- **目标**：`RE/HV/HF` 与 `U1/U2/U3` 元信号。
-- **输入**：特征/价格
-- **输出**：打标脚本
-- **关键步骤**：阈值/窗口；泄漏检查；持久化。
-- **DoD**：单元测试覆盖；可解释。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：401｜**工时**：S
-
-### 卡片 403
-- **模块**：验证
-- **标题**：单变量显著性检验
-- **目标**：效应方向/强度/显著性。
-- **输入**：特征+标签
-- **输出**：表格与图形、`validation/configs/preregister.yaml`
-- **关键步骤**：分箱/分位；t/非参检验；效应量（Cohen's d 或 Cliff's delta）计算；FDR-BH 或 Max-T 多重比较控制；维护预注册表（`validation/configs/preregister.yaml`）。
-- **DoD**：显著因子清单 & 方向一致；报告中含效应量与多重比较校正结果；预注册假设与执行记录齐全。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：402,118｜**工时**：M
-
-### 卡片 404
-- **模块**：验证
-- **标题**：多变量检验（Poisson/NegBin/OLS/Quantile）
-- **目标**：提频与提强，含交互项。
-- **输入**：显著因子
-- **输出**：回归系数表、显著性矩阵
-- **关键步骤**：VIF/共线性；交叉验证；稳健回归；效应量（Cohen's d、Cliff's delta 或 Partial η²）输出；FDR-BH 或 Max-T 多重比较控制并记录于 `validation/configs/preregister.yaml`。
-- **DoD**：稳定性≥0.6；解释变量方向合理；报告同步输出效应量表与多重比较校正后的 p 值，并附预注册假设引用。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：403,118｜**工时**：M
-
-### 卡片 405
-- **模块**：验证
-- **标题**：成本敏感性与鲁棒性
-- **目标**：三档成本均净效应>0 的组合保留。
-- **输入**：成本字典
-- **输出**：对比表与过滤结果
-- **关键步骤**：base/+50%/×2；敏感度排名；剔除边缘组合；与预检闸门共享阈值并产出准入信号。
-- **DoD**：与卡片 118 联动，三档成本需在预检与 Validator 中同时达标；输出准入闸门、失败样例与回退建议，生成鲁棒组合白名单。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：404,105,118｜**工时**：S
-
-### 卡片 406
-- **模块**：验证
-- **标题**：Validator 产出物固化
-- **目标**：统一文件名与模板。
-- **输入**：运行结果
-- **输出**：`OF_V6_stats.xlsx`、`combo_matrix.parquet`、`white_black_list.json`、`report.md`
-- **关键步骤**：表头/字段对齐；写入 `schema_version`、`build_id`、`data_manifest_hash`、`calibration_hash` 四键签名；签名不一致时拒收。
-- **DoD**：执行层可直接消费 JSON；文档齐备；所有产出 (`OF_V6_stats.xlsx` / `combo_matrix.parquet` / `white_black_list.json` / `report.md`) 均写入四键签名并经校验一致，不一致文件被执行层拒收。
-- **负责人**：量化研究｜**优先级**：P0｜**依赖**：405｜**工时**：S
-
----
-
-## 500–599 规则库（A/B/C/D · 20 条白名单）
-
-### 卡片 501
-- **模块**：规则
-- **标题**：A 组（平衡/响应）6 条规则编码
-- **目标**：A1–A6 触发/过滤/退出落地。
-- **输入**：指标/状态
-- **输出**：`configs/trade_rules.yaml`（A1–A6）
-- **关键步骤**：精确定义 `near_*` 与吸收条件；TP/SL=结构位。
-- **DoD**：lint 通过；dry-run 样例命中正确。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：406｜**工时**：M
-
-### 卡片 502
-- **模块**：规则
-- **标题**：B 组（趋势/主动）8 条规则编码
-- **目标**：B7–B14
-- **输入**：指标/状态
-- **输出**：`trade_rules.yaml`（B7–B14）
-- **关键步骤**：突破/回抽/失败突破；Open‑Drive；RE 单边。
-- **DoD**：lint 通过；样例命中准确；回测贡献为正。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：501｜**工时**：L
-
-### 卡片 503
-- **模块**：规则
-- **标题**：C 组（形态）4 条规则编码
-- **目标**：C15–C18（P 形、b 形、双分布、Outside Day）
-- **输入**：指标/状态
-- **输出**：`trade_rules.yaml`（C15–C18）
-- **关键步骤**：形态识别阈值；状态依赖的过滤条件。
-- **DoD**：lint 通过；样例可复现。
-- **负责人**：策略开发｜**优先级**：P1｜**依赖**：502｜**工时**：M
-
-### 卡片 504
-- **模块**：规则
-- **标题**：D 组（VWAP 转场）2 条规则编码
-- **目标**：D19–D20（夺回/失守）
-- **输入**：VWAP 偏离
-- **输出**：`trade_rules.yaml`（D19–D20）
-- **关键步骤**：偏离阈值、回补确认、退出条件统一。
-- **DoD**：lint 通过；样例 OK。
-- **负责人**：策略开发｜**优先级**：P1｜**依赖**：501–503｜**工时**：S
-
-### 卡片 505
-- **模块**：规则
-- **标题**：规则互斥/优先级/冲突解决
-- **目标**：同刻多信号择优；可追溯。
-- **输入**：规则集
-- **输出**：`configs/rules_meta.yaml`
-- **关键步骤**：优先级=状态置信度×评分；互斥组编码。
-- **DoD**：冲突时仅一条生效；日志记录原因。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：501–504｜**工时**：S
-
-### 卡片 506
-- **模块**：规则
-- **标题**：验证/执行双向一致性测试
-- **目标**：`validation` 与 `execution` 筛选逻辑一致。
-- **输入**：白名单 JSON、YAML
-- **输出**：一致性测试脚本
-- **关键步骤**：同一快照在两侧结果一致。
-- **DoD**：全样本 100% 一致或差异出具明细。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：505｜**工时**：S
-
----
-
-## 600–649 决策引擎（StructuredDecisionTree）
-
-### 卡片 601
-- **模块**：决策
-- **标题**：表达式解析器扩展
-- **目标**：支持 `crosses/in/pctl/函数`；组合条件。
-- **输入**：规则 YAML
-- **输出**：`strategy_core/decision_tree/parser.py`
-- **关键步骤**：AST/安全评估；单测覆盖。
-- **DoD**：规则库 100% 可解析。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：501–504｜**工时**：M
-
-### 卡片 602
-- **模块**：决策
-- **标题**：信号评分融合
-- **目标**：五维评分 + 状态置信度缩放。
-- **输入**：评分子模块
-- **输出**：`strategy_core/scoring.py`
-- **关键步骤**：权重/校准；阈值学习或网格。
-- **DoD**：评分与回测绩效正相关。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：205,305｜**工时**：M
-
-### 卡片 603
-- **模块**：决策
-- **标题**：冲突解决与出入场生成
-- **目标**：输出标准化 `Decision{action,size,reason,target,stop}`。
-- **输入**：规则命中、评分
-- **输出**：`strategy_core/decision_tree/engine.py`
-- **关键步骤**：优先级表；合并/过滤；边界条件。
-- **DoD**：决策日志完整；仿真通过。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：601,602｜**工时**：M
-
-### 卡片 604
-- **模块**：决策
-- **标题**：决策日志与可追溯性
-- **目标**：`logs/decision_log.jsonl`，含状态/评分/规则名。
-- **输入**：决策对象
-- **输出**：JSONL 日志
-- **关键步骤**：结构化字段；采样回放工具。
-- **DoD**：任一成交可追溯源规则与证据。
-- **负责人**：策略开发｜**优先级**：P1｜**依赖**：603｜**工时**：S
-
-### 卡片 607
-- **模块**：执行
-- **标题**：AB 双源热切换
-- **目标**：双路 `state_inference` 接入，满足校准/鲁棒/可执行性后切主，异常可回滚。
-- **输入**：轨 A/B 状态流、`mapping_tick2bar.pkl`、`validation/precheck/costs_gate.md`
-- **输出**：`execution/switch_policy.yaml`、`logs/switch_audit/*.log`
-- **关键步骤**：
-  1) 设计切换策略（观察期≥1 周、准入阈值：净效应>0、PSI<0.1、错配率<0.1%、ECE<3%、bar 连续性≥99.9%）并在 `execution/switch_policy.yaml` 中固化，明确回滚触发（成本溢出>2σ、PSI>0.3、红灯告警）。
-  2) 实现双源状态路由与健康检测，异常时自动退回轨 A，并将阈值与健康指标写入 `switch_policy.yaml`。
-  3) 记录切换/回滚审计日志，定期回放验证决策一致性，并保留金丝雀演练报告（收益/滑点/换手/状态持久度）。
-- **DoD**：热切换演练通过；切换/回滚日志完整；`execution/switch_policy.yaml` 记录观察期、准入阈值与回滚触发；满足净效应>0、PSI<0.1、错配率<0.1%、ECE<3%、bar 连续性≥99.9% 方可切换；回滚后策略可恢复稳定；执行层接口兼容 V5。
-- **负责人**：执行工程｜**优先级**：P0｜**依赖**：603,118,405｜**工时**：M
-- **风险&缓解**：高频状态不稳定→设置观察期与分级降级策略；执行接口差异→提供模拟回放与接口适配层。
-- **落盘路径**：`execution/`、`logs/switch_audit/`
-- **QA/工具**：回放模拟器、Chaos Testing、执行沙盒
-
----
-
-## 650–699 风险管理
-
-### 卡片 651
-- **模块**：风控
-- **标题**：仓位缩放与最小 RR 检查
-- **目标**：`size=f(state_confidence,H,vol)`；`RR≥1.5`。
-- **输入**：评分/状态/波动
-- **输出**：`execution/risk_manager.py`
-- **关键步骤**：函数曲线；边界与饱和；单测。
-- **DoD**：策略在高不确定性时自动降杠杆。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：602,305｜**工时**：S
-
-### 卡片 652
-- **模块**：风控
-- **标题**：冷却/熔断/日损限额
-- **目标**：防连击；止损阈触发停机。
-- **输入**：交易日志
-- **输出**：风控配置
-- **关键步骤**：冷却时间/连续亏损 N 次/日损 -R 触发。
-- **DoD**：回测&模拟盘可复现触发与恢复。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：651｜**工时**：S
-
-### 卡片 653
-- **模块**：风控
-- **标题**：异常路径与自愈
-- **目标**：数据断流/API 超时/滑点异常时降风控或停机。
-- **输入**：监控信号
-- **输出**：异常处理模块
-- **关键步骤**：重试/降级/熔断；告警对接。
-- **DoD**：异常演练通过。
-- **负责人**：策略开发｜**优先级**：P1｜**依赖**：652｜**工时**：S
-
----
-
-## 700–749 订单执行
-
-### 卡片 701
-- **模块**：执行
-- **标题**：交易所路由与账户抽象
-- **目标**：OKX/CCXT 统一接口；`paper/live` 切换。
-- **输入**：API Key、路由参数
-- **输出**：`execution/router.py`
-- **关键步骤**：时钟同步；重试策略；幂等下单。
-- **DoD**：沙盒端到端成功；重试可靠。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：603｜**工时**：M
-
-### 卡片 702
-- **模块**：执行
-- **标题**：限价挂单+滑点保护+TTL
-- **目标**：保护价、存活时间、撤单。
-- **输入**：行情/滑点参数
-- **输出**：下单策略实现
-- **关键步骤**：保护价计算；TTL 定时器；撤单/重挂。
-- **DoD**：部分成交处理正确；回放可复现。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：701｜**工时**：M
-
-### 卡片 703
-- **模块**：执行
-- **标题**：止损跟踪与分批止盈
-- **目标**：结构位/ATR 跟踪；多目标分批。
-- **输入**：结构位、ATR、规则 TP
-- **输出**：执行算法
-- **关键步骤**：触发器与队列；状态机。
-- **DoD**：回测/模拟盘收益提升且回撤受控。
-- **负责人**：策略开发｜**优先级**：P1｜**依赖**：702｜**工时**：M
-
-### 卡片 704
-- **模块**：执行
-- **标题**：网络稳健性与恢复
-- **目标**：断线自动重连、请求幂等。
-- **输入**：网络事件
-- **输出**：恢复模块
-- **关键步骤**：重试/退避；会话恢复；订单状态对账。
-- **DoD**：演练通过；无重复下单。
-- **负责人**：策略开发｜**优先级**：P1｜**依赖**：701｜**工时**：S
-
----
-
-## 750–799 回测与模拟盘
-
-### 卡片 751
-- **模块**：回测
-- **标题**：事件驱动回测器 & 规则归因
-- **目标**：收益/回撤/每规则贡献/状态分解。
-- **输入**：features、规则、成本
-- **输出**：`results/backtest_*` 图表与表格
-- **关键步骤**：撮合/滑点/成本；按规则归因。
-- **DoD**：指标稳定；可复现实验。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：506,651｜**工时**：L
-
-### 卡片 752
-- **模块**：回测
-- **标题**：成本场景与敏感性
-- **目标**：base/+50%/×2 全覆盖。
-- **输入**：costs.yaml
-- **输出**：敏感性报告
-- **关键步骤**：多场景跑批；对比汇总。
-- **DoD**：结论明确；存档。
-- **负责人**：量化研究｜**优先级**：P1｜**依赖**：751｜**工时**：S
-
-### 卡片 753
-- **模块**：模拟盘
-- **标题**：Paper 交易端到端
-- **目标**：实盘同构；日志与告警就绪。
-- **输入**：路由+风控
-- **输出**：完整日志、日报
-- **关键步骤**：仿真撮合；异常演练。
-- **DoD**：连续运行一个会话无中断。
-- **负责人**：策略开发｜**优先级**：P0｜**依赖**：701–704,651–653｜**工时**：M
-
----
-
-## 800–829 监控与可视化
-
-### 卡片 801
-- **模块**：监控
-- **标题**：观测面板（状态/评分/命中/P&L by rule）
-- **目标**：可观测性与回放。
-- **输入**：决策/执行日志
-- **输出**：Dashboard
-- **关键步骤**：指标聚合；热力图/时间轴；回放控件。
-- **DoD**：核心图表齐全；性能流畅。
-- **负责人**：DevOps｜**优先级**：P1｜**依赖**：604,753｜**工时**：M
-
-### 卡片 802
-- **模块**：监控
-- **标题**：告警与通知
-- **目标**：停机/断连/异常滑点/连续亏损即时通知。
-- **输入**：监控事件
-- **输出**：IM Webhook
-- **关键步骤**：阈值与抑制；告警路由；静默期。
-- **DoD**：演练触发；噪声可控。
-- **负责人**：DevOps｜**优先级**：P1｜**依赖**：653,704｜**工时**：S
-
-### 卡片 803
-- **模块**：监控
-- **标题**：日终归档与日报
-- **目标**：`results/daily_report_YYYYMMDD.md` 自动产出。
-- **输入**：交易与验证结果
-- **输出**：日报与归档
-- **关键步骤**：模板渲染；图表嵌入；上传归档。
-- **DoD**：每日自动生成并推送。
-- **负责人**：DevOps｜**优先级**：P2｜**依赖**：753｜**工时**：S
-
-### 卡片 808
-- **模块**：监控
-- **标题**：数据质量与健康度日报
-- **目标**：连续性/缺失/漂移/IO/延迟/报错闭环指标日报，分慢性劣化与急性故障两级健康面板。
-- **输入**：`preprocessing/align/index.parquet`、校准报告、数据管线日志
-- **输出**：`results/qc/date=YYYY-MM-DD/` 指标文件与 `qc_summary.md`
-- **关键步骤**：
-  1) 聚合连续性、缺失率、对齐一致率、PSI/KS/ECE、IO 吞吐与延迟等指标，并区分慢性劣化（趋势检验：线性回归斜率显著性 p<0.05 或 Mann–Kendall）与急性故障（近 N=1440 根 1m bars 内 p99/p999 阈值连续命中）。
-  2) 渲染日报模板，包含告警阈值、历史对比、缺口补救状态，输出 `qc_summary.md`（黄/红信号）。
-  3) 与告警系统集成，异常触发回补/重跑任务并记录闭环，每次告警须关联工单并可追溯补救动作。
-- **DoD**：日报在 T+1 10:00 前自动生成；慢性劣化与急性故障均可追溯到回补/重跑工单；指标可追溯至原始数据切片；`qc_summary.md` 标注黄/红等级并记录趋势/阈值命中依据。
-- **负责人**：DevOps｜**优先级**：P0｜**依赖**：115,116,118,803｜**工时**：M
-- **风险&缓解**：指标口径不一致→统一配置中心；数据延迟→引入缓冲 + 重跑机制；告警噪声→阈值动态调优。
-- **落盘路径**：`results/qc/`
-- **QA/工具**：Great Expectations、CI 定时任务、Grafana/Metabase
-
----
-
-## 830–859 部署与运维
-
-### 卡片 831
-- **模块**：运维
-- **标题**：Docker 化与一键启动
-- **目标**：`docker compose up -d` 拉起 paper/live。
-- **输入**：Dockerfile、Compose
-- **输出**：镜像、Compose 脚本
-- **关键步骤**：时区 Europe/Paris；健康检查；日志挂载。
-- **DoD**：本地/服务器一致运行。
-- **负责人**：DevOps｜**优先级**：P0｜**依赖**：000,701｜**工时**：M
-
-### 卡片 832
-- **模块**：运维
-- **标题**：多环境配置（dev/paper/prod）
-- **目标**：配置分层与覆盖。
-- **输入**：`configs/*`
-- **输出**：环境差异配置
-- **关键步骤**：层叠加载；敏感参数外置。
-- **DoD**：切换环境仅改 ENV。
-- **负责人**：DevOps｜**优先级**：P1｜**依赖**：831｜**工时**：S
-
-### 卡片 833
-- **模块**：运维
-- **标题**：备份/恢复与崩溃自启
-- **目标**：模型/结果/日志安全；意外重启。
-- **输入**：`models/results/logs`
-- **输出**：备份脚本、systemd/Compose 重启策略
-- **关键步骤**：周期归档；冷备；校验恢复流程。
-- **DoD**：灾备演练通过。
-- **负责人**：DevOps｜**优先级**：P1｜**依赖**：831｜**工时**：S
-
----
-
-## 860–899 文档与审计
-
-### 卡片 861
-- **模块**：文档
-- **标题**：README（目录树/一键运行）
-- **目标**：新人 30 分钟内跑通。
-- **输入**：工程现状
-- **输出**：`README.md`
-- **关键步骤**：动机/结构/运行/常见问题。
-- **DoD**：新人测试通过。
-- **负责人**：全员共编｜**优先级**：P0｜**依赖**：000–003｜**工时**：S
-
-### 卡片 862
-- **模块**：文档
-- **标题**：ARCHITECTURE/VALIDATION/CHANGELOG
-- **目标**：体系化文档三件套。
-- **输入**：各模块实现
-- **输出**：`ARCHITECTURE.md`、`VALIDATION_REPORT.md`、`CHANGELOG.md`
-- **关键步骤**：数据流图、接口表；统计方法与结果；版本演进。
-- **DoD**：审计通过；外部评审可读。
-- **负责人**：量化研究/策略/DevOps｜**优先级**：P1｜**依赖**：核心模块完成｜**工时**：M
-
-### 卡片 863
-- **模块**：文档/合规
-- **标题**：合规、可追溯与发布绑定文档
-- **目标**：固化数据用途/保留期/再分发限制、卡片→脚本→产物索引与 release 签名，缺失即 Gate 阻断。
-- **输入**：任务卡片、manifest/calibration 产出、CI/发布流程
-- **输出**：`COMPLIANCE.md`、`docs/traceability.md`、`releases/release.yml`
-- **关键步骤**：
-  1) 在 `COMPLIANCE.md` 中写明数据用途、最少保留期、脱敏策略及再分发限制分级（内部/外部/开源），并为 CI 编写“文件存在+关键段落关键字”检查。
-  2) 生成 `docs/traceability.md`，按“卡片→脚本→产物→报告”四段索引，关联 manifest、calibration、验证报告及 release。
-  3) 创建 `releases/release.yml`，绑定 `data_manifest_hash`、`calibration_hash`、`model_artifact_id`，记录影子模型与一周金丝雀窗口，缺失签名或 `COMPLIANCE.md` 即 Gate 阻断。
-- **DoD**：任意 release 可依据 `releases/release.yml`、`docs/traceability.md` 与 `COMPLIANCE.md` 完整恢复；CI 存在关键文档与关键字检查；签名不一致或缺失合规文档时自动阻断发布。
-- **负责人**：DevOps/合规｜**优先级**：P0｜**依赖**：109-118,403-406｜**工时**：M
-- **风险&缓解**：合规口径变化→建立版本历史；签名校验失败→自动通知并回滚。
-
----
-
-## 900–949 里程碑验收
-
-### 卡片 901–906（M1–M6）
-- **M1 数据&指标**：`features.parquet` + 指标质控报告（负责人：数据/量化）
-- **M2 状态模型**：`hmm.pkl` + `state_inference.py`（负责人：量化/策略）
-- **M3 验证闭环**：`OF_V6_stats.xlsx`、`combo_matrix.parquet`、`white_black_list.json`（负责人：量化）
-- **M4 规则&引擎**：`trade_rules.yaml` 通过 lint；dry‑run 正确（负责人：策略）
-- **M5 回测&模拟盘**：多市况达标；监控/告警就绪（负责人：策略/DevOps）
-- **M6 实盘小额**：连续稳定运行；复盘与迭代计划（负责人：全员）
-
----
-
-> 备注：本卡片库与 V6 说明书/V5 执行&验证手册字段一致；可在 `configs/` 下挂接你的现有 YAML/JSON。若需要，我可以生成 **Jira CSV 导入模板**（含自定义字段/负责人/依赖关系/标签）。
-
+# OrderFlow V6 — 分层工程卡片（重构版）
+
+_本文件由迁移脚本自动生成；QA 段位保持原号作为审计索引_
+
+
+## 控制编辑层
+
+- **K001** — 仓库初始化与README Quickstart
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K001** — 迁移自旧卡片 3
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K002** — 目录与命名规范
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K002** — 迁移自旧卡片 4
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K003** — 迁移自旧卡片 5
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K004** — 迁移自旧卡片 6
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K005** — 迁移自旧卡片 7
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K006** — 迁移自旧卡片 8
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K007** — 迁移自旧卡片 9
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K008** — 迁移自旧卡片 10
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K009** — 迁移自旧卡片 11
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K010** — SCHEMA/Manifest 契约与签名
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K010** — 迁移自旧卡片 12
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K011** — 迁移自旧卡片 13
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K012** — 迁移自旧卡片 14
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K013** — 迁移自旧卡片 15
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K014** — 迁移自旧卡片 16
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K015** — 迁移自旧卡片 17
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K016** — 迁移自旧卡片 18
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K017** — 迁移自旧卡片 19
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K018** — 迁移自旧卡片 20
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K019** — 迁移自旧卡片 21
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K020** — 迁移自旧卡片 22
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K021** — 迁移自旧卡片 23
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K022** — 迁移自旧卡片 24
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K023** — 迁移自旧卡片 25
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K024** — 迁移自旧卡片 26
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K025** — 迁移自旧卡片 27
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K026** — 迁移自旧卡片 28
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K027** — 迁移自旧卡片 29
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K028** — 迁移自旧卡片 30
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K029** — 迁移自旧卡片 31
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K030** — 迁移自旧卡片 32
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K031** — 迁移自旧卡片 33
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K032** — 迁移自旧卡片 34
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K033** — 迁移自旧卡片 35
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K034** — 迁移自旧卡片 36
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K035** — 迁移自旧卡片 37
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K036** — 迁移自旧卡片 38
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K037** — 迁移自旧卡片 39
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K038** — 迁移自旧卡片 40
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K039** — 迁移自旧卡片 41
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K040** — 迁移自旧卡片 42
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K041** — 迁移自旧卡片 43
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K042** — 迁移自旧卡片 44
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K043** — 迁移自旧卡片 45
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K044** — 迁移自旧卡片 46
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K045** — 迁移自旧卡片 47
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K046** — 迁移自旧卡片 48
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **K047** — 迁移自旧卡片 49
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+
+## 数据层
+
+- **D001** — 迁移自旧卡片 100
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D002** — 迁移自旧卡片 103
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D003** — 迁移自旧卡片 104
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D004** — 迁移自旧卡片 105
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D005** — 迁移自旧卡片 106
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D006** — 迁移自旧卡片 114
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D007** — 迁移自旧卡片 119
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D008** — 迁移自旧卡片 120
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D009** — 迁移自旧卡片 121
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D010** — 迁移自旧卡片 122
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D011** — 迁移自旧卡片 123
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D012** — 迁移自旧卡片 124
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D013** — 迁移自旧卡片 125
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D014** — 迁移自旧卡片 126
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D015** — 迁移自旧卡片 127
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D016** — 迁移自旧卡片 128
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D017** — 迁移自旧卡片 129
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D018** — 迁移自旧卡片 130
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D019** — 迁移自旧卡片 131
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D020** — 迁移自旧卡片 132
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D021** — 迁移自旧卡片 133
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D022** — 迁移自旧卡片 134
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D023** — 迁移自旧卡片 135
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D024** — 迁移自旧卡片 136
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D025** — 迁移自旧卡片 137
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D026** — 迁移自旧卡片 138
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D027** — 迁移自旧卡片 139
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D028** — 迁移自旧卡片 140
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D029** — 迁移自旧卡片 141
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D030** — 迁移自旧卡片 142
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D031** — 迁移自旧卡片 143
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D032** — 迁移自旧卡片 144
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D033** — 迁移自旧卡片 145
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D034** — 迁移自旧卡片 146
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D035** — 迁移自旧卡片 147
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D036** — 迁移自旧卡片 148
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D037** — 迁移自旧卡片 149
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D038** — 迁移自旧卡片 150
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D039** — 迁移自旧卡片 151
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D040** — 迁移自旧卡片 152
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D041** — 迁移自旧卡片 153
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D042** — 迁移自旧卡片 154
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D043** — 迁移自旧卡片 155
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D044** — 迁移自旧卡片 156
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D045** — 迁移自旧卡片 157
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D046** — 迁移自旧卡片 158
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D047** — 迁移自旧卡片 159
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D048** — 迁移自旧卡片 160
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D049** — 迁移自旧卡片 161
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D050** — 迁移自旧卡片 162
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D051** — 迁移自旧卡片 163
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D052** — 迁移自旧卡片 164
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D053** — 迁移自旧卡片 165
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D054** — 迁移自旧卡片 166
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D055** — 迁移自旧卡片 167
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D056** — 迁移自旧卡片 168
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D057** — 迁移自旧卡片 169
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D058** — 迁移自旧卡片 170
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D059** — 迁移自旧卡片 171
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D060** — 迁移自旧卡片 172
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D061** — 迁移自旧卡片 173
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D062** — 迁移自旧卡片 174
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D063** — 迁移自旧卡片 175
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D064** — 迁移自旧卡片 176
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D065** — 迁移自旧卡片 177
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D066** — 迁移自旧卡片 178
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D067** — 迁移自旧卡片 179
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D068** — 迁移自旧卡片 180
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D069** — 迁移自旧卡片 181
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D070** — 迁移自旧卡片 182
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D071** — 迁移自旧卡片 183
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D072** — 迁移自旧卡片 184
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D073** — 迁移自旧卡片 185
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D074** — 迁移自旧卡片 186
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D075** — 迁移自旧卡片 187
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D076** — 迁移自旧卡片 188
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D077** — 迁移自旧卡片 189
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D078** — 迁移自旧卡片 190
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D079** — 迁移自旧卡片 191
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D080** — 迁移自旧卡片 192
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D081** — 迁移自旧卡片 193
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D082** — 迁移自旧卡片 194
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D083** — 迁移自旧卡片 195
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D084** — 迁移自旧卡片 196
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D085** — 迁移自旧卡片 197
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D086** — 迁移自旧卡片 198
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D087** — 迁移自旧卡片 199
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D101** — ATAS 指标导出 DLL
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D102** — ATAS 回放配置与导出流水
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D107** — ATAS Bar 连续性/缺口自检
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D108** — ATAS Tick 质量评估
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D109** — 分层分区 raw→staged→processed
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D110** — manifest & watermark
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D111** — ATAS Bar 聚合
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D112** — ATAS 真 Tick 连续抓取
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D113** — Binance OHLCV + aggTrades
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D115** — 对齐索引 alignment_index
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **D116** — minute↔tick 映射与分布校准
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+
+## 模型层
+
+- **M001** — 迁移自旧卡片 200
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M002** — 迁移自旧卡片 201
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M003** — 迁移自旧卡片 202
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M004** — 迁移自旧卡片 203
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M005** — 迁移自旧卡片 204
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M006** — 迁移自旧卡片 206
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M007** — 迁移自旧卡片 207
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M008** — 迁移自旧卡片 208
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M009** — 迁移自旧卡片 209
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M010** — 迁移自旧卡片 210
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M011** — 迁移自旧卡片 211
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M012** — 迁移自旧卡片 212
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M013** — 迁移自旧卡片 213
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M014** — 迁移自旧卡片 214
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M015** — 迁移自旧卡片 215
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M016** — 迁移自旧卡片 216
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M017** — 迁移自旧卡片 217
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M018** — 迁移自旧卡片 218
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M019** — 迁移自旧卡片 219
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M020** — 迁移自旧卡片 220
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M021** — 迁移自旧卡片 221
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M022** — 迁移自旧卡片 222
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M023** — 迁移自旧卡片 223
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M024** — 迁移自旧卡片 224
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M025** — 迁移自旧卡片 225
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M026** — 迁移自旧卡片 226
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M027** — 迁移自旧卡片 227
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M028** — 迁移自旧卡片 228
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M029** — 迁移自旧卡片 229
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M030** — 迁移自旧卡片 230
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M031** — 迁移自旧卡片 231
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M032** — 迁移自旧卡片 232
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M033** — 迁移自旧卡片 233
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M034** — 迁移自旧卡片 234
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M035** — 迁移自旧卡片 235
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M036** — 迁移自旧卡片 236
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M037** — 迁移自旧卡片 237
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M038** — 迁移自旧卡片 238
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M039** — 迁移自旧卡片 239
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M040** — 迁移自旧卡片 240
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M041** — 迁移自旧卡片 241
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M042** — 迁移自旧卡片 242
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M043** — 迁移自旧卡片 243
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M044** — 迁移自旧卡片 244
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M045** — 迁移自旧卡片 245
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M046** — 迁移自旧卡片 246
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M047** — 迁移自旧卡片 247
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M048** — 迁移自旧卡片 248
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M049** — 迁移自旧卡片 249
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M050** — 迁移自旧卡片 250
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M051** — 迁移自旧卡片 251
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M052** — 迁移自旧卡片 252
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M053** — 迁移自旧卡片 253
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M054** — 迁移自旧卡片 254
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M055** — 迁移自旧卡片 255
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M056** — 迁移自旧卡片 256
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M057** — 迁移自旧卡片 257
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M058** — 迁移自旧卡片 258
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M059** — 迁移自旧卡片 259
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M060** — 迁移自旧卡片 260
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M061** — 迁移自旧卡片 261
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M062** — 迁移自旧卡片 262
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M063** — 迁移自旧卡片 263
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M064** — 迁移自旧卡片 264
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M065** — 迁移自旧卡片 265
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M066** — 迁移自旧卡片 266
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M067** — 迁移自旧卡片 267
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M068** — 迁移自旧卡片 268
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M069** — 迁移自旧卡片 269
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M070** — 迁移自旧卡片 270
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M071** — 迁移自旧卡片 271
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M072** — 迁移自旧卡片 272
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M073** — 迁移自旧卡片 273
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M074** — 迁移自旧卡片 274
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M075** — 迁移自旧卡片 275
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M076** — 迁移自旧卡片 276
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M077** — 迁移自旧卡片 277
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M078** — 迁移自旧卡片 278
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M079** — 迁移自旧卡片 279
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M080** — 迁移自旧卡片 280
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M081** — 迁移自旧卡片 281
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M082** — 迁移自旧卡片 282
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M083** — 迁移自旧卡片 283
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M084** — 迁移自旧卡片 284
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M085** — 迁移自旧卡片 285
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M086** — 迁移自旧卡片 286
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M087** — 迁移自旧卡片 287
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M088** — 迁移自旧卡片 288
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M089** — 迁移自旧卡片 289
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M090** — 迁移自旧卡片 290
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M091** — 迁移自旧卡片 291
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M092** — 迁移自旧卡片 292
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M093** — 迁移自旧卡片 293
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M094** — 迁移自旧卡片 294
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M095** — 迁移自旧卡片 295
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M096** — 迁移自旧卡片 296
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M097** — 迁移自旧卡片 297
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M098** — 迁移自旧卡片 298
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M099** — 迁移自旧卡片 299
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M100** — 迁移自旧卡片 300
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M101** — 迁移自旧卡片 301
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M102** — 迁移自旧卡片 302
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M103** — 迁移自旧卡片 303
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M104** — 迁移自旧卡片 304
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M105** — 迁移自旧卡片 306
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M106** — 迁移自旧卡片 307
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M107** — 迁移自旧卡片 308
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M108** — 迁移自旧卡片 309
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M109** — 迁移自旧卡片 310
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M110** — 迁移自旧卡片 311
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M111** — 迁移自旧卡片 312
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M112** — 迁移自旧卡片 313
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M113** — 迁移自旧卡片 314
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M114** — 迁移自旧卡片 315
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M115** — 迁移自旧卡片 316
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M116** — 迁移自旧卡片 317
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M117** — 状态置信度/驻留分布校准
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M117** — 迁移自旧卡片 318
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M118** — 迁移自旧卡片 319
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M119** — 迁移自旧卡片 320
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M120** — 迁移自旧卡片 321
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M121** — 迁移自旧卡片 322
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M122** — 迁移自旧卡片 323
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M123** — 迁移自旧卡片 324
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M124** — 迁移自旧卡片 325
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M125** — 迁移自旧卡片 326
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M126** — 迁移自旧卡片 327
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M127** — 迁移自旧卡片 328
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M128** — 迁移自旧卡片 329
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M129** — 迁移自旧卡片 330
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M130** — 迁移自旧卡片 331
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M131** — 迁移自旧卡片 332
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M132** — 迁移自旧卡片 333
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M133** — 迁移自旧卡片 334
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M134** — 迁移自旧卡片 335
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M135** — 迁移自旧卡片 336
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M136** — 迁移自旧卡片 337
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M137** — 迁移自旧卡片 338
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M138** — 迁移自旧卡片 339
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M139** — 迁移自旧卡片 340
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M140** — 迁移自旧卡片 341
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M141** — 迁移自旧卡片 342
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M142** — 迁移自旧卡片 343
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M143** — 迁移自旧卡片 344
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M144** — 迁移自旧卡片 345
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M145** — 迁移自旧卡片 346
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M146** — 迁移自旧卡片 347
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M147** — 迁移自旧卡片 348
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M148** — 迁移自旧卡片 349
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M149** — 迁移自旧卡片 350
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M150** — 迁移自旧卡片 351
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M151** — 迁移自旧卡片 352
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M152** — 迁移自旧卡片 353
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M153** — 迁移自旧卡片 354
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M154** — 迁移自旧卡片 355
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M155** — 迁移自旧卡片 356
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M156** — 迁移自旧卡片 357
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M157** — 迁移自旧卡片 358
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M158** — 迁移自旧卡片 359
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M159** — 迁移自旧卡片 360
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M160** — 迁移自旧卡片 361
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M161** — 迁移自旧卡片 362
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M162** — 迁移自旧卡片 363
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M163** — 迁移自旧卡片 364
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M164** — 迁移自旧卡片 365
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M165** — 迁移自旧卡片 366
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M166** — 迁移自旧卡片 367
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M167** — 迁移自旧卡片 368
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M168** — 迁移自旧卡片 369
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M169** — 迁移自旧卡片 370
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M170** — 迁移自旧卡片 371
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M171** — 迁移自旧卡片 372
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M172** — 迁移自旧卡片 373
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M173** — 迁移自旧卡片 374
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M174** — 迁移自旧卡片 375
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M175** — 迁移自旧卡片 376
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M176** — 迁移自旧卡片 377
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M177** — 迁移自旧卡片 378
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M178** — 迁移自旧卡片 379
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M179** — 迁移自旧卡片 380
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M180** — 迁移自旧卡片 381
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M181** — 迁移自旧卡片 382
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M182** — 迁移自旧卡片 383
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M183** — 迁移自旧卡片 384
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M184** — 迁移自旧卡片 385
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M185** — 迁移自旧卡片 386
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M186** — 迁移自旧卡片 387
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M187** — 迁移自旧卡片 388
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M188** — 迁移自旧卡片 389
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M189** — 迁移自旧卡片 390
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M190** — 迁移自旧卡片 391
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M191** — 迁移自旧卡片 392
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M192** — 迁移自旧卡片 393
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M193** — 迁移自旧卡片 394
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M194** — 迁移自旧卡片 395
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M195** — 迁移自旧卡片 396
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M196** — 迁移自旧卡片 397
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M197** — 迁移自旧卡片 398
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M198** — 迁移自旧卡片 399
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M205** — MSI/MFI/KLI 指标族与签名
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **M305** — HMM/TVTP 训练与推断
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+
+## 决策层
+
+- **J001** — 迁移自旧卡片 500
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J002** — 迁移自旧卡片 501
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J003** — 迁移自旧卡片 502
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J004** — 迁移自旧卡片 503
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J005** — 迁移自旧卡片 504
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J006** — 迁移自旧卡片 506
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J007** — 迁移自旧卡片 507
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J008** — 迁移自旧卡片 508
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J009** — 迁移自旧卡片 509
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J010** — 迁移自旧卡片 510
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J011** — 迁移自旧卡片 511
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J012** — 迁移自旧卡片 512
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J013** — 迁移自旧卡片 513
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J014** — 迁移自旧卡片 514
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J015** — 迁移自旧卡片 515
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J016** — 迁移自旧卡片 516
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J017** — 迁移自旧卡片 517
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J018** — 迁移自旧卡片 518
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J019** — 迁移自旧卡片 519
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J020** — 迁移自旧卡片 520
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J021** — 迁移自旧卡片 521
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J022** — 迁移自旧卡片 522
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J023** — 迁移自旧卡片 523
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J024** — 迁移自旧卡片 524
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J025** — 迁移自旧卡片 525
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J026** — 迁移自旧卡片 526
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J027** — 迁移自旧卡片 527
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J028** — 迁移自旧卡片 528
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J029** — 迁移自旧卡片 529
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J030** — 迁移自旧卡片 530
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J031** — 迁移自旧卡片 531
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J032** — 迁移自旧卡片 532
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J033** — 迁移自旧卡片 533
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J034** — 迁移自旧卡片 534
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J035** — 迁移自旧卡片 535
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J036** — 迁移自旧卡片 536
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J037** — 迁移自旧卡片 537
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J038** — 迁移自旧卡片 538
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J039** — 迁移自旧卡片 539
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J040** — 迁移自旧卡片 540
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J041** — 迁移自旧卡片 541
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J042** — 迁移自旧卡片 542
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J043** — 迁移自旧卡片 543
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J044** — 迁移自旧卡片 544
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J045** — 迁移自旧卡片 545
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J046** — 迁移自旧卡片 546
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J047** — 迁移自旧卡片 547
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J048** — 迁移自旧卡片 548
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J049** — 迁移自旧卡片 549
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J050** — 迁移自旧卡片 550
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J051** — 迁移自旧卡片 551
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J052** — 迁移自旧卡片 552
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J053** — 迁移自旧卡片 553
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J054** — 迁移自旧卡片 554
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J055** — 迁移自旧卡片 555
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J056** — 迁移自旧卡片 556
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J057** — 迁移自旧卡片 557
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J058** — 迁移自旧卡片 558
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J059** — 迁移自旧卡片 559
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J060** — 迁移自旧卡片 560
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J061** — 迁移自旧卡片 561
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J062** — 迁移自旧卡片 562
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J063** — 迁移自旧卡片 563
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J064** — 迁移自旧卡片 564
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J065** — 迁移自旧卡片 565
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J066** — 迁移自旧卡片 566
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J067** — 迁移自旧卡片 567
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J068** — 迁移自旧卡片 568
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J069** — 迁移自旧卡片 569
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J070** — 迁移自旧卡片 570
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J071** — 迁移自旧卡片 571
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J072** — 迁移自旧卡片 572
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J073** — 迁移自旧卡片 573
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J074** — 迁移自旧卡片 574
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J075** — 迁移自旧卡片 575
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J076** — 迁移自旧卡片 576
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J077** — 迁移自旧卡片 577
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J078** — 迁移自旧卡片 578
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J079** — 迁移自旧卡片 579
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J080** — 迁移自旧卡片 580
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J081** — 迁移自旧卡片 581
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J082** — 迁移自旧卡片 582
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J083** — 迁移自旧卡片 583
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J084** — 迁移自旧卡片 584
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J085** — 迁移自旧卡片 585
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J086** — 迁移自旧卡片 586
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J087** — 迁移自旧卡片 587
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J088** — 迁移自旧卡片 588
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J089** — 迁移自旧卡片 589
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J090** — 迁移自旧卡片 590
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J091** — 迁移自旧卡片 591
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J092** — 迁移自旧卡片 592
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J093** — 迁移自旧卡片 593
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J094** — 迁移自旧卡片 594
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J095** — 迁移自旧卡片 595
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J096** — 迁移自旧卡片 596
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J097** — 迁移自旧卡片 597
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J098** — 迁移自旧卡片 598
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J099** — 迁移自旧卡片 599
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J100** — 迁移自旧卡片 600
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J101** — 迁移自旧卡片 602
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J102** — 迁移自旧卡片 603
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J103** — 迁移自旧卡片 604
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J104** — 迁移自旧卡片 605
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J105** — 迁移自旧卡片 606
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J106** — 迁移自旧卡片 608
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J107** — 迁移自旧卡片 609
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J108** — 迁移自旧卡片 610
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J109** — 迁移自旧卡片 611
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J110** — 迁移自旧卡片 612
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J111** — 迁移自旧卡片 613
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J112** — 迁移自旧卡片 614
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J113** — 迁移自旧卡片 615
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J114** — 迁移自旧卡片 616
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J115** — 迁移自旧卡片 617
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J116** — 迁移自旧卡片 618
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J117** — 迁移自旧卡片 619
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J118** — 迁移自旧卡片 620
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J119** — 迁移自旧卡片 621
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J120** — 迁移自旧卡片 622
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J121** — 迁移自旧卡片 623
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J122** — 迁移自旧卡片 624
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J123** — 迁移自旧卡片 625
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J124** — 迁移自旧卡片 626
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J125** — 迁移自旧卡片 627
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J126** — 迁移自旧卡片 628
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J127** — 迁移自旧卡片 629
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J128** — 迁移自旧卡片 630
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J129** — 迁移自旧卡片 631
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J130** — 迁移自旧卡片 632
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J131** — 迁移自旧卡片 633
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J132** — 迁移自旧卡片 634
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J133** — 迁移自旧卡片 635
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J134** — 迁移自旧卡片 636
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J135** — 迁移自旧卡片 637
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J136** — 迁移自旧卡片 638
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J137** — 迁移自旧卡片 639
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J138** — 迁移自旧卡片 640
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J139** — 迁移自旧卡片 641
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J140** — 迁移自旧卡片 642
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J141** — 迁移自旧卡片 643
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J142** — 迁移自旧卡片 644
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J143** — 迁移自旧卡片 645
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J144** — 迁移自旧卡片 646
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J145** — 迁移自旧卡片 647
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J146** — 迁移自旧卡片 648
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J147** — 迁移自旧卡片 649
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J505** — 规则互斥/一致性测试
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **J601** — 解析/评分/冲突/决策日志
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+
+## 执行层
+
+- **E001** — 迁移自旧卡片 650
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E002** — 迁移自旧卡片 651
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E003** — 迁移自旧卡片 652
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E004** — 迁移自旧卡片 653
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E005** — 迁移自旧卡片 654
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E006** — 迁移自旧卡片 655
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E007** — 迁移自旧卡片 656
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E008** — 迁移自旧卡片 657
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E009** — 迁移自旧卡片 658
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E010** — 迁移自旧卡片 659
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E011** — 迁移自旧卡片 660
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E012** — 迁移自旧卡片 661
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E013** — 迁移自旧卡片 662
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E014** — 迁移自旧卡片 663
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E015** — 迁移自旧卡片 664
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E016** — 迁移自旧卡片 665
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E017** — 迁移自旧卡片 666
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E018** — 迁移自旧卡片 667
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E019** — 迁移自旧卡片 668
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E020** — 迁移自旧卡片 669
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E021** — 迁移自旧卡片 670
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E022** — 迁移自旧卡片 671
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E023** — 迁移自旧卡片 672
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E024** — 迁移自旧卡片 673
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E025** — 迁移自旧卡片 674
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E026** — 迁移自旧卡片 675
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E027** — 迁移自旧卡片 676
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E028** — 迁移自旧卡片 677
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E029** — 迁移自旧卡片 678
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E030** — 迁移自旧卡片 679
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E031** — 迁移自旧卡片 680
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E032** — 迁移自旧卡片 681
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E033** — 迁移自旧卡片 682
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E034** — 迁移自旧卡片 683
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E035** — 迁移自旧卡片 684
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E036** — 迁移自旧卡片 685
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E037** — 迁移自旧卡片 686
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E038** — 迁移自旧卡片 687
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E039** — 迁移自旧卡片 688
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E040** — 迁移自旧卡片 689
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E041** — 迁移自旧卡片 690
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E042** — 迁移自旧卡片 691
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E043** — 迁移自旧卡片 692
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E044** — 迁移自旧卡片 693
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E045** — 迁移自旧卡片 694
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E046** — 迁移自旧卡片 695
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E047** — 迁移自旧卡片 696
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E048** — 迁移自旧卡片 697
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E049** — 迁移自旧卡片 698
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E050** — 迁移自旧卡片 699
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E051** — 迁移自旧卡片 700
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E052** — 迁移自旧卡片 702
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E053** — 迁移自旧卡片 703
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E054** — 迁移自旧卡片 704
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E055** — 迁移自旧卡片 705
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E056** — 迁移自旧卡片 706
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E057** — 迁移自旧卡片 707
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E058** — 迁移自旧卡片 708
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E059** — 迁移自旧卡片 709
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E060** — 迁移自旧卡片 710
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E061** — 迁移自旧卡片 711
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E062** — 迁移自旧卡片 712
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E063** — 迁移自旧卡片 713
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E064** — 迁移自旧卡片 714
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E065** — 迁移自旧卡片 715
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E066** — 迁移自旧卡片 716
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E067** — 迁移自旧卡片 717
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E068** — 迁移自旧卡片 718
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E069** — 迁移自旧卡片 719
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E070** — 迁移自旧卡片 720
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E071** — 迁移自旧卡片 721
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E072** — 迁移自旧卡片 722
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E073** — 迁移自旧卡片 723
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E074** — 迁移自旧卡片 724
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E075** — 迁移自旧卡片 725
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E076** — 迁移自旧卡片 726
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E077** — 迁移自旧卡片 727
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E078** — 迁移自旧卡片 728
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E079** — 迁移自旧卡片 729
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E080** — 迁移自旧卡片 730
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E081** — 迁移自旧卡片 731
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E082** — 迁移自旧卡片 732
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E083** — 迁移自旧卡片 733
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E084** — 迁移自旧卡片 734
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E085** — 迁移自旧卡片 735
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E086** — 迁移自旧卡片 736
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E087** — 迁移自旧卡片 737
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E088** — 迁移自旧卡片 738
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E089** — 迁移自旧卡片 739
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E090** — 迁移自旧卡片 740
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E091** — 迁移自旧卡片 741
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E092** — 迁移自旧卡片 742
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E093** — 迁移自旧卡片 743
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E094** — 迁移自旧卡片 744
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E095** — 迁移自旧卡片 745
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E096** — 迁移自旧卡片 746
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E097** — 迁移自旧卡片 747
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E098** — 迁移自旧卡片 748
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E099** — 迁移自旧卡片 749
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E118** — 成本鲁棒与成交可达性预检
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E607** — AB 双源热切换与回滚
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **E701** — 下单/会话恢复/风控
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+
+## QA 与报告层
+
+- **QA400** — 迁移自旧卡片 400
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA401** — 迁移自旧卡片 401
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA402** — 迁移自旧卡片 402
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA403** — 迁移自旧卡片 403
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA404** — 迁移自旧卡片 404
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA405** — 迁移自旧卡片 405
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA406** — 迁移自旧卡片 406
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA407** — 迁移自旧卡片 407
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA408** — 迁移自旧卡片 408
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA409** — 迁移自旧卡片 409
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA410** — 迁移自旧卡片 410
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA411** — 迁移自旧卡片 411
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA412** — 迁移自旧卡片 412
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA413** — 迁移自旧卡片 413
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA414** — 迁移自旧卡片 414
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA415** — 迁移自旧卡片 415
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA416** — 迁移自旧卡片 416
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA417** — 迁移自旧卡片 417
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA418** — 迁移自旧卡片 418
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA419** — 迁移自旧卡片 419
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA420** — 迁移自旧卡片 420
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA421** — 迁移自旧卡片 421
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA422** — 迁移自旧卡片 422
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA423** — 迁移自旧卡片 423
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA424** — 迁移自旧卡片 424
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA425** — 迁移自旧卡片 425
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA426** — 迁移自旧卡片 426
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA427** — 迁移自旧卡片 427
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA428** — 迁移自旧卡片 428
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA429** — 迁移自旧卡片 429
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA430** — 迁移自旧卡片 430
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA431** — 迁移自旧卡片 431
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA432** — 迁移自旧卡片 432
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA433** — 迁移自旧卡片 433
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA434** — 迁移自旧卡片 434
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA435** — 迁移自旧卡片 435
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA436** — 迁移自旧卡片 436
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA437** — 迁移自旧卡片 437
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA438** — 迁移自旧卡片 438
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA439** — 迁移自旧卡片 439
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA440** — 迁移自旧卡片 440
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA441** — 迁移自旧卡片 441
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA442** — 迁移自旧卡片 442
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA443** — 迁移自旧卡片 443
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA444** — 迁移自旧卡片 444
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA445** — 迁移自旧卡片 445
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA446** — 迁移自旧卡片 446
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA447** — 迁移自旧卡片 447
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA448** — 迁移自旧卡片 448
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA449** — 迁移自旧卡片 449
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA450** — 迁移自旧卡片 450
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA451** — 迁移自旧卡片 451
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA452** — 迁移自旧卡片 452
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA453** — 迁移自旧卡片 453
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA454** — 迁移自旧卡片 454
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA455** — 迁移自旧卡片 455
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA456** — 迁移自旧卡片 456
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA457** — 迁移自旧卡片 457
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA458** — 迁移自旧卡片 458
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA459** — 迁移自旧卡片 459
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA460** — 迁移自旧卡片 460
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA461** — 迁移自旧卡片 461
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA462** — 迁移自旧卡片 462
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA463** — 迁移自旧卡片 463
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA464** — 迁移自旧卡片 464
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA465** — 迁移自旧卡片 465
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA466** — 迁移自旧卡片 466
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA467** — 迁移自旧卡片 467
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA468** — 迁移自旧卡片 468
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA469** — 迁移自旧卡片 469
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA470** — 迁移自旧卡片 470
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA471** — 迁移自旧卡片 471
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA472** — 迁移自旧卡片 472
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA473** — 迁移自旧卡片 473
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA474** — 迁移自旧卡片 474
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA475** — 迁移自旧卡片 475
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA476** — 迁移自旧卡片 476
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA477** — 迁移自旧卡片 477
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA478** — 迁移自旧卡片 478
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA479** — 迁移自旧卡片 479
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA480** — 迁移自旧卡片 480
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA481** — 迁移自旧卡片 481
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA482** — 迁移自旧卡片 482
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA483** — 迁移自旧卡片 483
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA484** — 迁移自旧卡片 484
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA485** — 迁移自旧卡片 485
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA486** — 迁移自旧卡片 486
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA487** — 迁移自旧卡片 487
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA488** — 迁移自旧卡片 488
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA489** — 迁移自旧卡片 489
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA490** — 迁移自旧卡片 490
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA491** — 迁移自旧卡片 491
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA492** — 迁移自旧卡片 492
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA493** — 迁移自旧卡片 493
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA494** — 迁移自旧卡片 494
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA495** — 迁移自旧卡片 495
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA496** — 迁移自旧卡片 496
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA497** — 迁移自旧卡片 497
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA498** — 迁移自旧卡片 498
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA499** — 迁移自旧卡片 499
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA750** — 迁移自旧卡片 750
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA751** — 回测与 Paper 交易
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA752** — 迁移自旧卡片 752
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA753** — 迁移自旧卡片 753
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA754** — 迁移自旧卡片 754
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA755** — 迁移自旧卡片 755
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA756** — 迁移自旧卡片 756
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA757** — 迁移自旧卡片 757
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA758** — 迁移自旧卡片 758
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA759** — 迁移自旧卡片 759
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA760** — 迁移自旧卡片 760
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA761** — 迁移自旧卡片 761
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA762** — 迁移自旧卡片 762
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA763** — 迁移自旧卡片 763
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA764** — 迁移自旧卡片 764
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA765** — 迁移自旧卡片 765
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA766** — 迁移自旧卡片 766
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA767** — 迁移自旧卡片 767
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA768** — 迁移自旧卡片 768
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA769** — 迁移自旧卡片 769
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA770** — 迁移自旧卡片 770
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA771** — 迁移自旧卡片 771
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA772** — 迁移自旧卡片 772
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA773** — 迁移自旧卡片 773
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA774** — 迁移自旧卡片 774
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA775** — 迁移自旧卡片 775
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA776** — 迁移自旧卡片 776
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA777** — 迁移自旧卡片 777
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA778** — 迁移自旧卡片 778
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA779** — 迁移自旧卡片 779
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA780** — 迁移自旧卡片 780
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA781** — 迁移自旧卡片 781
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA782** — 迁移自旧卡片 782
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA783** — 迁移自旧卡片 783
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA784** — 迁移自旧卡片 784
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA785** — 迁移自旧卡片 785
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA786** — 迁移自旧卡片 786
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA787** — 迁移自旧卡片 787
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA788** — 迁移自旧卡片 788
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA789** — 迁移自旧卡片 789
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA790** — 迁移自旧卡片 790
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA791** — 迁移自旧卡片 791
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA792** — 迁移自旧卡片 792
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA793** — 迁移自旧卡片 793
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA794** — 迁移自旧卡片 794
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA795** — 迁移自旧卡片 795
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA796** — 迁移自旧卡片 796
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA797** — 迁移自旧卡片 797
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA798** — 迁移自旧卡片 798
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA799** — 迁移自旧卡片 799
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA800** — 迁移自旧卡片 800
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA801** — 观测面板 / 数据质量日报
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA802** — 迁移自旧卡片 802
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA803** — 迁移自旧卡片 803
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA804** — 迁移自旧卡片 804
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA805** — 迁移自旧卡片 805
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA806** — 迁移自旧卡片 806
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA807** — 迁移自旧卡片 807
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA808** — 迁移自旧卡片 808
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA809** — 迁移自旧卡片 809
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA810** — 迁移自旧卡片 810
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA811** — 迁移自旧卡片 811
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA812** — 迁移自旧卡片 812
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA813** — 迁移自旧卡片 813
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA814** — 迁移自旧卡片 814
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA815** — 迁移自旧卡片 815
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA816** — 迁移自旧卡片 816
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA817** — 迁移自旧卡片 817
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA818** — 迁移自旧卡片 818
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA819** — 迁移自旧卡片 819
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA820** — 迁移自旧卡片 820
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA821** — 迁移自旧卡片 821
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA822** — 迁移自旧卡片 822
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA823** — 迁移自旧卡片 823
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA824** — 迁移自旧卡片 824
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA825** — 迁移自旧卡片 825
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA826** — 迁移自旧卡片 826
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA827** — 迁移自旧卡片 827
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA828** — 迁移自旧卡片 828
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA829** — 迁移自旧卡片 829
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA860** — 迁移自旧卡片 860
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA861** — README/ARCHITECTURE/VALIDATION
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA862** — 迁移自旧卡片 862
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA863** — 迁移自旧卡片 863
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA864** — 迁移自旧卡片 864
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA865** — 迁移自旧卡片 865
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA866** — 迁移自旧卡片 866
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA867** — 迁移自旧卡片 867
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA868** — 迁移自旧卡片 868
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA869** — 迁移自旧卡片 869
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA870** — 迁移自旧卡片 870
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA871** — 迁移自旧卡片 871
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA872** — 迁移自旧卡片 872
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA873** — 迁移自旧卡片 873
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA874** — 迁移自旧卡片 874
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA875** — 迁移自旧卡片 875
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA876** — 迁移自旧卡片 876
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA877** — 迁移自旧卡片 877
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA878** — 迁移自旧卡片 878
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA879** — 迁移自旧卡片 879
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA880** — 迁移自旧卡片 880
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA881** — 迁移自旧卡片 881
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA882** — 迁移自旧卡片 882
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA883** — 迁移自旧卡片 883
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA884** — 迁移自旧卡片 884
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA885** — 迁移自旧卡片 885
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA886** — 迁移自旧卡片 886
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA887** — 迁移自旧卡片 887
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA888** — 迁移自旧卡片 888
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA889** — 迁移自旧卡片 889
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA890** — 迁移自旧卡片 890
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA891** — 迁移自旧卡片 891
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA892** — 迁移自旧卡片 892
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA893** — 迁移自旧卡片 893
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA894** — 迁移自旧卡片 894
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA895** — 迁移自旧卡片 895
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA896** — 迁移自旧卡片 896
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA897** — 迁移自旧卡片 897
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA898** — 迁移自旧卡片 898
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **QA899** — 迁移自旧卡片 899
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+
+## 未分类
+
+- **UNK830** — 迁移自旧卡片 830
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **UNK831** — 迁移自旧卡片 831
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **UNK832** — 迁移自旧卡片 832
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **UNK833** — 迁移自旧卡片 833
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **UNK900** — 迁移自旧卡片 900
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **UNK901** — 迁移自旧卡片 901
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
+
+- **UNK999** — 迁移自旧卡片 999
+  - owner: TBA
+  - depends_on: []
+  - outputs: []
+  - acceptance:
+    - schema/contract satisfied
+    - self-check passed
+    - signature fields present
