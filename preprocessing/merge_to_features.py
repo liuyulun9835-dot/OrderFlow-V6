@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Tuple
+from typing import Any, Iterable, List, Tuple
 
 import numpy as np
 import pandas as pd
@@ -249,8 +250,12 @@ def flatten_absorption(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def clamp_tolerance(tolerance_seconds: int) -> int:
+    return max(5, min(15, tolerance_seconds))
+
+
 def merge_streams(kline: pd.DataFrame, atas: pd.DataFrame, tolerance_seconds: int) -> pd.DataFrame:
-    tolerance_seconds = max(5, min(15, tolerance_seconds))
+    tolerance_seconds = clamp_tolerance(tolerance_seconds)
     merged = pd.merge_asof(
         kline.sort_values("timestamp"),
         atas.sort_values("timestamp"),
@@ -302,7 +307,8 @@ def main() -> None:
         atas_df = apply_offset(atas_df, offset)
     print(f"ATAS offset applied: {offset} minute(s) ({offset_label})")
 
-    merged = merge_streams(kline_df, atas_df, args.tolerance_seconds)
+    tolerance_applied = clamp_tolerance(args.tolerance_seconds)
+    merged = merge_streams(kline_df, atas_df, tolerance_applied)
     merged = order_columns(merged)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -315,6 +321,47 @@ def main() -> None:
         mismatch_rate = merged["absorption_detected"].isna().mean() if "absorption_detected" in merged else 0.0
         print(f"Right-closed minute buckets applied (UTC). Mismatch rate: {mismatch_rate:.4%}")
     print_coverage(merged)
+
+    if not merged.empty:
+        start_ts = merged["timestamp"].min()
+        end_ts = merged["timestamp"].max()
+
+        def to_iso(ts: pd.Timestamp) -> str:
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            else:
+                ts = ts.tz_convert("UTC")
+            return ts.isoformat().replace("+00:00", "Z")
+
+        total_pairs = int(len(merged))
+        mismatched_pairs = (
+            int(merged["absorption_detected"].isna().sum())
+            if "absorption_detected" in merged
+            else int(total_pairs)
+        )
+        mismatch_rate = float(mismatched_pairs / max(1, total_pairs))
+
+        Path("results").mkdir(parents=True, exist_ok=True)
+        merge_metrics = {
+            "schema_version": "1.0",
+            "computed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "window": {
+                "start": to_iso(start_ts),
+                "end": to_iso(end_ts),
+            },
+            "sample_size": int(total_pairs),
+            "stats": {
+                "total_pairs": int(total_pairs),
+                "mismatched_pairs": int(mismatched_pairs),
+                "tolerance_seconds": int(tolerance_applied),
+                "direction": "backward",
+            },
+            "mismatch_rate": mismatch_rate,
+        }
+        with Path("results/merge_metrics.json").open("w", encoding="utf-8") as handle:
+            json.dump(merge_metrics, handle, ensure_ascii=False, indent=2)
+    else:
+        print("Merged dataset empty; skipping merge metrics export.")
 
 
 if __name__ == "__main__":

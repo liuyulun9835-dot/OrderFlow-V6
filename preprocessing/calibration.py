@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -13,21 +14,45 @@ import pandas as pd
 
 from orderflow_v6.seeding import seed_all
 
-PROFILE_PATH = Path("calibration_profile.json")
+PROFILE_PATH = Path("results/calibration_profile.json")
 REPORT_PATH = Path("results/merge_and_calibration_report.md")
-THRESHOLDS = {"psi": 0.2, "ks": 0.1, "ece": 0.03}
+THRESHOLDS = {"psi": 0.1, "ks_stat": 0.1, "ece": 0.03}
+METHODS_NOTE = """
+### Methods & Thresholds
+- PSI threshold: 0.1 (stable), 0.1–0.25 (monitor), >0.25 (shift).
+- KS uses the **statistic** threshold 0.1 (not p-value). We compare the KS statistic against 0.1 for each stratum.
+- ECE calibration threshold: 0.03.
+"""
 
 
 @dataclass
 class StratifiedMetrics:
-    name: str
+    stratum: str
+    column: str
     psi: float
-    ks: float
+    ks_stat: float
     ece: float
+    start: pd.Timestamp | None
+    end: pd.Timestamp | None
 
     def status(self) -> str:
-        passed = self.psi <= THRESHOLDS["psi"] and self.ks <= THRESHOLDS["ks"] and self.ece <= THRESHOLDS["ece"]
+        passed = (
+            self.psi <= THRESHOLDS["psi"]
+            and self.ks_stat <= THRESHOLDS["ks_stat"]
+            and self.ece <= THRESHOLDS["ece"]
+        )
         return "PASS" if passed else "FAIL"
+
+    def segment_status(self) -> str:
+        return "ok" if self.status() == "PASS" else "violation"
+
+
+def normalise_timestamp(value: pd.Timestamp | None) -> pd.Timestamp | None:
+    if value is None or pd.isna(value):
+        return None
+    if isinstance(value, pd.Timestamp):
+        return value
+    return pd.to_datetime(value, utc=True, errors="coerce")
 
 
 def load_frame(path: Path) -> pd.DataFrame:
@@ -84,41 +109,128 @@ def ece_score(actual: np.ndarray, expected: np.ndarray, bins: int = 10) -> float
 
 def evaluate_strata(reference: pd.DataFrame, target: pd.DataFrame) -> list[StratifiedMetrics]:
     metrics: list[StratifiedMetrics] = []
+
     for stratum, ref_slice in reference.groupby("stratum"):
         tgt_slice = target[target["stratum"] == stratum]
         if tgt_slice.empty or ref_slice.empty:
             continue
+        start_ts = normalise_timestamp(tgt_slice.get("minute").min() if "minute" in tgt_slice else None)
+        end_ts = normalise_timestamp(tgt_slice.get("minute").max() if "minute" in tgt_slice else None)
         for column in tgt_slice.select_dtypes(include=[np.number]).columns:
             ref_values = ref_slice[column].dropna().to_numpy()
             tgt_values = tgt_slice[column].dropna().to_numpy()
             if ref_values.size < 5 or tgt_values.size < 5:
                 continue
             psi = psi_score(tgt_values, ref_values)
-            ks = ks_score(tgt_values, ref_values)
+            ks_stat = ks_score(tgt_values, ref_values)
             ece = ece_score(tgt_values, ref_values)
-            metrics.append(StratifiedMetrics(name=f"{stratum}:{column}", psi=psi, ks=ks, ece=ece))
+            metrics.append(
+                StratifiedMetrics(
+                    stratum=stratum,
+                    column=column,
+                    psi=psi,
+                    ks_stat=ks_stat,
+                    ece=ece,
+                    start=start_ts,
+                    end=end_ts,
+                )
+            )
     if not metrics:
+        start_ts = normalise_timestamp(target.get("minute").min() if "minute" in target else None)
+        end_ts = normalise_timestamp(target.get("minute").max() if "minute" in target else None)
         for column in target.select_dtypes(include=[np.number]).columns:
             ref_values = reference[column].dropna().to_numpy()
             tgt_values = target[column].dropna().to_numpy()
             if ref_values.size < 5 or tgt_values.size < 5:
                 continue
             psi = psi_score(tgt_values, ref_values)
-            ks = ks_score(tgt_values, ref_values)
+            ks_stat = ks_score(tgt_values, ref_values)
             ece = ece_score(tgt_values, ref_values)
-            metrics.append(StratifiedMetrics(name=f"global:{column}", psi=psi, ks=ks, ece=ece))
+            metrics.append(
+                StratifiedMetrics(
+                    stratum="global",
+                    column=column,
+                    psi=psi,
+                    ks_stat=ks_stat,
+                    ece=ece,
+                    start=start_ts,
+                    end=end_ts,
+                )
+            )
     return metrics
 
 
-def save_profile(strata_metrics: list[StratifiedMetrics], path: Path) -> None:
-    payload = {
-        "thresholds": THRESHOLDS,
-        "strata": [
-            {"name": metric.name, "psi": metric.psi, "ks": metric.ks, "ece": metric.ece, "status": metric.status()}
-            for metric in strata_metrics
-        ],
+def save_profile(
+    strata_metrics: list[StratifiedMetrics],
+    path: Path,
+    global_start: pd.Timestamp | None,
+    global_end: pd.Timestamp | None,
+) -> None:
+    def to_iso(ts: pd.Timestamp | None) -> str | None:
+        if ts is None or pd.isna(ts):
+            return None
+        if ts.tzinfo is None:
+            ts = ts.tz_localize("UTC")
+        else:
+            ts = ts.tz_convert("UTC")
+        return ts.isoformat().replace("+00:00", "Z")
+
+    max_psi = max((metric.psi for metric in strata_metrics), default=0.0)
+    max_ks = max((metric.ks_stat for metric in strata_metrics), default=0.0)
+    max_ece = max((metric.ece for metric in strata_metrics), default=0.0)
+
+    layers: list[dict[str, object]] = []
+    for stratum in sorted({metric.stratum for metric in strata_metrics}):
+        stratum_metrics = [metric for metric in strata_metrics if metric.stratum == stratum]
+        if not stratum_metrics:
+            continue
+        segments: list[dict[str, object]] = []
+        for metric in stratum_metrics:
+            start_iso = to_iso(metric.start or global_start)
+            end_iso = to_iso(metric.end or global_end)
+            if start_iso is None or end_iso is None:
+                continue
+            segments.append(
+                {
+                    "start": start_iso,
+                    "end": end_iso,
+                    "psi": float(metric.psi),
+                    "ks_stat": float(metric.ks_stat),
+                    "ece": float(metric.ece),
+                    "status": metric.segment_status(),
+                }
+            )
+        if not segments:
+            continue
+        layers.append(
+            {
+                "name": str(stratum),
+                "metric_summaries": {
+                    "psi": float(max(metric.psi for metric in stratum_metrics)),
+                    "ks_stat": float(max(metric.ks_stat for metric in stratum_metrics)),
+                    "ece": float(max(metric.ece for metric in stratum_metrics)),
+                },
+                "segments": segments,
+            }
+        )
+
+    profile = {
+        "schema_version": "1.0",
+        "computed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "thresholds": {
+            "psi": THRESHOLDS["psi"],
+            "ks_stat": THRESHOLDS["ks_stat"],
+            "ece": THRESHOLDS["ece"],
+        },
+        "layers": layers,
+        "psi_max_observed": float(max_psi),
+        "ks_stat_max_observed": float(max_ks),
+        "ece_max_observed": float(max_ece),
+        "method_notes": METHODS_NOTE.strip(),
     }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(profile, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def load_offset_curve(path: Path) -> list[dict[str, float]]:
@@ -143,12 +255,16 @@ def render_report(strata_metrics: list[StratifiedMetrics], offset_curve: list[di
         lines.append("")
 
     lines.append("## Stratified metrics")
-    lines.append("| stratum | PSI | KS | ECE | status |")
-    lines.append("| --- | --- | --- | --- | --- |")
+    lines.append("| stratum | column | PSI | KS_stat | ECE | status |")
+    lines.append("| --- | --- | --- | --- | --- | --- |")
     for metric in strata_metrics:
         lines.append(
-            f"| {metric.name} | {metric.psi:.4f} | {metric.ks:.4f} | {metric.ece:.4f} | {metric.status()} |"
+            f"| {metric.stratum} | {metric.column} | {metric.psi:.4f} | {metric.ks_stat:.4f} | {metric.ece:.4f} | {metric.status()} |"
         )
+
+    if strata_metrics:
+        lines.append("")
+    lines.append(METHODS_NOTE.strip())
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text("\n".join(lines), encoding="utf-8")
@@ -171,8 +287,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     else:
         reference = features.copy()
 
+    global_start = normalise_timestamp(features.get("minute").min() if "minute" in features else None)
+    global_end = normalise_timestamp(features.get("minute").max() if "minute" in features else None)
+
     metrics = evaluate_strata(reference, features)
-    save_profile(metrics, args.profile)
+    save_profile(metrics, args.profile, global_start, global_end)
     offset_curve = load_offset_curve(args.offset)
     render_report(metrics, offset_curve, args.report)
 

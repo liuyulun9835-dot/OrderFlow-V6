@@ -3,7 +3,8 @@ preconditions:
   bar_continuity_min: 0.999
   tick_continuity_min: 0.999
   ece_max: 0.03
-  psi_max: 0.3
+  psi_max: 0.1
+  mismatch_rate_max: 0.001
   cost_gate_required: true
   alerts_block: ["red"]
 

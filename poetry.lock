@@ -2473,4 +2473,4 @@ analytics = ["polars"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.12"
-content-hash = "9566843cbda634eb6ba879a1033cc364e96c9e301f92df2b5fe540aa80855b52"
+content-hash = "a3b58bdd1705dbbdc70419285f8b5165642d14945c99f8434baad6a1956c866d"
