@@ -14,20 +14,31 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from zoneinfo import ZoneInfo
 
+from orderflow_v6.seeding import seed_all
+
 TIMESTAMP_CANDIDATES = ("timestamp", "time", "datetime", "dt", "bar_time")
-DEFAULT_ATAS_DIR = Path("data/atas")
-DEFAULT_KLINE_PATH = Path("data/exchange/kline_1m.parquet")
+DEFAULT_ATAS_DIR = Path("data/raw/atas/bar")
 DEFAULT_OUTPUT_PATH = Path("data/processed/features.parquet")
+DEFAULT_RESULTS_PATH = Path("results/offset_diagnostics.json")
+OFFSET_RANGE = tuple(range(-2, 3))
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Merge ATAS and exchange data into features.parquet")
     parser.add_argument("--symbol", help="Symbol identifier for logging", default=None)
     parser.add_argument("--atas-dir", type=Path, default=DEFAULT_ATAS_DIR, help="Directory containing ATAS exports")
-    parser.add_argument("--kline", type=Path, default=DEFAULT_KLINE_PATH, help="Path to 1m kline parquet file")
+    parser.add_argument("--kline", type=Path, required=True, help="Path to 1m kline parquet file")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH, help="Path to output parquet file")
-    parser.add_argument("--atas-tz", default="Europe/Moscow", help="Timezone for naive ATAS timestamps")
-    parser.add_argument("--tolerance-seconds", type=int, default=45, help="Nearest-neighbour tolerance in seconds")
+    parser.add_argument("--atas-tz", default="UTC", help="Timezone for naive ATAS timestamps")
+    parser.add_argument(
+        "--results", type=Path, default=DEFAULT_RESULTS_PATH, help="Where to store offset diagnostics JSON"
+    )
+    parser.add_argument(
+        "--tolerance-seconds",
+        type=int,
+        default=10,
+        help="Backward merge tolerance in seconds (clamped to the [5, 15] range)",
+    )
     parser.add_argument("--offset-minutes", type=int, help="Override ATAS timestamp offset in minutes")
     return parser.parse_args()
 
@@ -74,6 +85,17 @@ def load_jsonl_file(path: Path) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+def infer_timezone(frame: pd.DataFrame, candidate: str) -> str:
+    ts_column = detect_timestamp_column(frame.columns)
+    if ts_column not in frame or frame[ts_column].empty:
+        return candidate
+    series = pd.to_datetime(frame[ts_column], errors="coerce")
+    if series.dt.tz is not None:
+        tz_name = str(series.dt.tz)
+        return tz_name
+    return candidate
+
+
 def normalise_atas_frame(df: pd.DataFrame, tz_name: str) -> pd.DataFrame:
     if df.empty:
         return df
@@ -115,7 +137,8 @@ def load_atas(directory: Path, tz_name: str) -> pd.DataFrame:
             raw = load_jsonl_file(path)
         else:
             raw = load_json_file(path)
-        normalised = normalise_atas_frame(raw, tz_name)
+        tz_guess = infer_timezone(raw, tz_name)
+        normalised = normalise_atas_frame(raw, tz_guess)
         if not normalised.empty:
             frames.append(normalised)
     if not frames:
@@ -147,31 +170,44 @@ def load_kline(path: Path) -> pd.DataFrame:
     return df
 
 
-def estimate_offset_minutes(atas: pd.DataFrame, kline: pd.DataFrame) -> Tuple[int, bool]:
-    if atas.empty or kline.empty:
-        return 0, False
-    sample = atas.head(2000).copy()
-    sample = sample.sort_values("timestamp")
-    kline_subset = kline[["timestamp"]].copy().rename(columns={"timestamp": "kline_timestamp"})
-    merged = pd.merge_asof(
-        sample[["timestamp"]],
-        kline_subset,
+def compute_offset_score(shifted: pd.DataFrame, kline: pd.DataFrame) -> float:
+    if shifted.empty or kline.empty:
+        return 0.0
+    joined = pd.merge_asof(
+        shifted.sort_values("timestamp"),
+        kline[["timestamp"]].sort_values("timestamp").rename(columns={"timestamp": "kline_ts"}),
         left_on="timestamp",
-        right_on="kline_timestamp",
-        direction="nearest",
-        tolerance=pd.Timedelta(seconds=300),
+        right_on="kline_ts",
+        direction="backward",
+        tolerance=pd.Timedelta(seconds=15),
     )
-    merged.dropna(subset=["kline_timestamp"], inplace=True)
-    if merged.empty:
-        return 0, False
-    delta_minutes = (
-        (merged["kline_timestamp"] - merged["timestamp"]).dt.total_seconds() / 60.0
-    )
-    median_offset = float(delta_minutes.median())
-    rounded = int(round(median_offset))
-    if abs(median_offset - rounded) <= 0.4:
-        return rounded, True
-    return 0, False
+    matches = joined["kline_ts"].notna().sum()
+    if matches == 0:
+        return 0.0
+    return matches / len(joined)
+
+
+def scan_offset_candidates(atas: pd.DataFrame, kline: pd.DataFrame) -> List[dict[str, float]]:
+    diagnostics: List[dict[str, float]] = []
+    for offset in OFFSET_RANGE:
+        shifted = apply_offset(atas, offset)
+        score = compute_offset_score(shifted, kline)
+        diagnostics.append({"offset": offset, "score": float(score)})
+    diagnostics.sort(key=lambda item: item["offset"])
+    return diagnostics
+
+
+def estimate_offset_minutes(atas: pd.DataFrame, kline: pd.DataFrame) -> Tuple[int, bool, List[dict[str, float]]]:
+    if atas.empty or kline.empty:
+        return 0, False, []
+    diagnostics = scan_offset_candidates(atas, kline)
+    if not diagnostics:
+        return 0, False, diagnostics
+    best = max(diagnostics, key=lambda item: item["score"])
+    diagnostics_sorted = sorted(diagnostics, key=lambda item: item["score"], reverse=True)
+    top_two = diagnostics_sorted[:2]
+    applied = best["score"] >= 0.5 and (not top_two or best == diagnostics_sorted[0])
+    return int(best["offset"]), applied, diagnostics
 
 
 def apply_offset(df: pd.DataFrame, minutes: int) -> pd.DataFrame:
@@ -214,11 +250,12 @@ def flatten_absorption(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def merge_streams(kline: pd.DataFrame, atas: pd.DataFrame, tolerance_seconds: int) -> pd.DataFrame:
+    tolerance_seconds = max(5, min(15, tolerance_seconds))
     merged = pd.merge_asof(
         kline.sort_values("timestamp"),
         atas.sort_values("timestamp"),
         on="timestamp",
-        direction="nearest",
+        direction="backward",
         tolerance=pd.Timedelta(seconds=tolerance_seconds),
     )
     merged = flatten_absorption(merged)
@@ -243,6 +280,8 @@ def print_coverage(df: pd.DataFrame) -> None:
 
 
 def main() -> None:
+    seed = seed_all()
+    print(f"Seed initialised: {seed}")
     args = parse_args()
     atas_df = load_atas(args.atas_dir, args.atas_tz)
     kline_df = load_kline(args.kline)
@@ -250,12 +289,15 @@ def main() -> None:
     if args.offset_minutes is not None:
         offset = args.offset_minutes
         offset_label = "manual"
+        diagnostics: list[dict[str, float]] = []
     else:
-        offset, auto_applied = estimate_offset_minutes(atas_df, kline_df)
+        offset, auto_applied, diagnostics = estimate_offset_minutes(atas_df, kline_df)
         offset_label = "auto"
         if not auto_applied:
-            print(
-                "Auto offset estimation outside ±0.4 minute threshold; falling back to 0-minute shift.")
+            print("Auto offset estimation below confidence threshold; falling back to 0-minute shift.")
+        if args.results:
+            args.results.parent.mkdir(parents=True, exist_ok=True)
+            args.results.write_text(json.dumps({"offset_candidates": diagnostics}, indent=2), encoding="utf-8")
     if offset != 0:
         atas_df = apply_offset(atas_df, offset)
     print(f"ATAS offset applied: {offset} minute(s) ({offset_label})")
@@ -270,6 +312,8 @@ def main() -> None:
     print(f"Merged rows: {len(merged)}")
     if not merged.empty:
         print(f"Time range: {merged['timestamp'].min()} → {merged['timestamp'].max()}")
+        mismatch_rate = merged["absorption_detected"].isna().mean() if "absorption_detected" in merged else 0.0
+        print(f"Right-closed minute buckets applied (UTC). Mismatch rate: {mismatch_rate:.4%}")
     print_coverage(merged)
 
 

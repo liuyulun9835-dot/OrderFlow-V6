@@ -1,3 +1,14 @@
+sources:
+  - name: tick
+    degrade_to: bar
+    embargo_bars: 2
+    purge_kfold: 5
+    degrade_rules:
+      tick_gap_threshold: 0.05
+      calibration_breach: true
+  - name: bar
+    embargo_bars: 1
+    purge_kfold: 5
 # OrderFlow V6 Priority Downgrade Rules
 version: 1
 embargo_bars: 5

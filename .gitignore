@@ -10,5 +10,11 @@
 
 # Result artifacts
 /results/**/*.md
+!/results/bar_continuity_report.md
+!/results/canary_switch_dryrun.md
+!/results/merge_and_calibration_report.md
+!/results/precheck_costs_report.md
+!/results/qc_summary.md
+!/results/tick_quality_report.md
 !/results/README.md
 !/results/.gitkeep

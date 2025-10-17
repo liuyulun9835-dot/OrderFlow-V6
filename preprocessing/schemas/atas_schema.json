@@ -2,63 +2,83 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ATAS Market Data Schema",
   "type": "object",
+  "description": "ATAS order-flow bar export in UTC, prices in quote currency units, volumes in base units",
   "properties": {
     "timestamp": {
       "type": "string",
-      "format": "date-time"
+      "format": "date-time",
+      "description": "Bar close time, ISO8601 with timezone, minute right-closed"
     },
     "open": {
-      "type": "number"
+      "type": "number",
+      "description": "Open price (quote currency, precision <= 1e-2)"
     },
     "high": {
-      "type": "number"
+      "type": "number",
+      "description": "High price (quote currency, precision <= 1e-2)"
     },
     "low": {
-      "type": "number"
+      "type": "number",
+      "description": "Low price (quote currency, precision <= 1e-2)"
     },
     "close": {
-      "type": "number"
+      "type": "number",
+      "description": "Close price (quote currency, precision <= 1e-2)"
     },
     "volume": {
       "type": "number",
-      "minimum": 0
+      "minimum": 0,
+      "description": "Total traded volume (base currency, precision <= 1e-3)"
     },
     "poc": {
-      "type": "number"
+      "type": "number",
+      "description": "Point of control (quote currency)"
     },
     "vah": {
-      "type": "number"
+      "type": "number",
+      "description": "Value area high (quote currency)"
     },
     "val": {
-      "type": "number"
+      "type": "number",
+      "description": "Value area low (quote currency)"
     },
     "cvd": {
-      "type": "number"
+      "type": "number",
+      "description": "Cumulative volume delta (base currency)"
+    },
+    "absorption_detected": {
+      "type": ["boolean", "null"],
+      "description": "Absorption flag (flattened schema)"
+    },
+    "absorption_strength": {
+      "type": ["number", "null"],
+      "description": "Absorption strength (contracts)"
+    },
+    "absorption_side": {
+      "type": ["string", "null"],
+      "enum": ["buy", "sell", "neutral", null],
+      "description": "Absorption side"
     },
     "absorption": {
       "type": "object",
+      "description": "Nested absorption payload",
       "properties": {
         "detected": {
-          "type": "boolean"
+          "type": ["boolean", "null"],
+          "description": "Absorption detected flag"
         },
         "strength": {
-          "type": "number"
+          "type": ["number", "null"],
+          "description": "Absorption strength (contracts)"
         },
         "side": {
-          "type": "string",
-          "enum": [
-            "buy",
-            "sell",
-            "neutral",
-            ""
-          ]
+          "type": ["string", "null"],
+          "enum": ["buy", "sell", "neutral", null],
+          "description": "Absorption side"
         }
       },
-      "required": [
-        "detected",
-        "side"
-      ],
-      "additionalProperties": false
+      "required": [],
+      "additionalProperties": true
     }
   },
   "required": [
@@ -67,12 +87,40 @@
     "high",
     "low",
     "close",
-    "volume",
-    "poc",
-    "vah",
-    "val",
-    "cvd",
-    "absorption"
+    "volume"
   ],
-  "additionalProperties": false
+  "additionalProperties": {
+    "anyOf": [
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "null"
+      }
+    ]
+  },
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "required": [
+            "absorption_detected",
+            "absorption_strength",
+            "absorption_side"
+          ]
+        },
+        {
+          "required": [
+            "absorption"
+          ]
+        }
+      ]
+    }
+  ]
 }

@@ -7,16 +7,22 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      TZ: UTC
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install Poetry
         run: pip install poetry
       - name: Install dependencies
-        run: poetry install
-      - name: Run Lint
+        run: poetry install --with dev
+      - name: Run lint suite
         run: make lint
-      - name: Run Tests
+      - name: Run tests
         run: make test
+      - name: Cost gate
+        run: poetry run python validation/src/precheck_costs.py
+      - name: Signature gate
+        run: poetry run python validation/src/validate_outputs.py

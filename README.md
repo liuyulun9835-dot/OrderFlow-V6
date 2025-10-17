@@ -50,19 +50,24 @@ OrderFlow-V6/
 关键目录与脚本：
 - [atas_integration/indicators/SimplifiedDataExporter.cs](atas_integration/indicators/SimplifiedDataExporter.cs)：ATAS 指标导出与回放配置。
 - [preprocessing/fetch_kline.py](preprocessing/fetch_kline.py)、[preprocessing/merge_to_features.py](preprocessing/merge_to_features.py)：行情抓取与特征合并脚本。
-- [scripts/batch_replay.sh](scripts/batch_replay.sh)、[scripts/init_data_tree.py](scripts/init_data_tree.py)：数据导出与目录初始化工具。
+- [scripts/init_data_tree.py](scripts/init_data_tree.py)：数据分层占位初始化。
 - [validation/src/qc_report.py](validation/src/qc_report.py)、[validation/src/validate_json.py](validation/src/validate_json.py)：数据质控与 schema 校验。
 - [results/README.md](results/README.md)：实验与报告复现指引。
 
 ## Quickstart
 1. 安装依赖：`poetry install`
-2. 初始化目录与样例：`make quickstart`（覆盖数据目录与 docs 副本检查）
-3. 可选：执行 `python scripts/init_data_tree.py` 创建数据分层占位；使用 `scripts/batch_replay.sh` 批量导出 ATAS 数据。
+2. 初始化目录：`python scripts/init_data_tree.py`
+3. 拉取/追加行情并合并特征：
+   ```powershell
+   python scripts/update_pipeline.ps1 -Symbol BTCUSDT -Since 2024-01-01 -Until 2024-01-07
+   ```
+   `preprocessing/merge_to_features.py` 需显式传入 `--kline data/exchange/BTCUSDT/kline_1m.parquet` 与 `--atas-dir data/raw/atas/bar/BTCUSDT`，默认 UTC 右闭左开。
 详细任务与路径请参考 [任务卡片库](docs/OrderFlow%20V6%20—%20任务卡片库V1.1.md) 与 [工程日志](工程日志_order_flow_v_6_（_2025_10_15_）.md)。
 
 ## Results & Reports
 所有合并、校准、验证与 QC 报告需落盘至 `results/`：
-- `results/merge_and_calibration_report.md`：minute↔tick 映射与校准结论。
-- `results/qc/date=YYYY-MM-DD/`：数据质量与健康度日报。
-- `validation/out/`：Validator v2 产出（显著性、成本鲁棒、准入闸门）。
+- `results/bar_continuity_report.md` / `results/tick_quality_report.md`：连续性与 tick 质量基线。
+- `results/merge_and_calibration_report.md`：minute↔tick 映射与分层校准结论。
+- `results/precheck_costs_report.md`：成本闸门敏感度曲线。
+- `results/canary_switch_dryrun.md`：热切换策略干跑结果。
 更多复现指引见 [results/README.md](results/README.md)。
