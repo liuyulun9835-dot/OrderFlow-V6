@@ -3,6 +3,7 @@
   "title": "ATAS Market Data Schema",
   "type": "object",
   "description": "ATAS order-flow bar export in UTC, prices in quote currency units, volumes in base units",
+  "schema_version": "v6.2",
   "properties": {
     "timestamp": {
       "type": "string",
@@ -45,6 +46,22 @@
     "cvd": {
       "type": "number",
       "description": "Cumulative volume delta (base currency)"
+    },
+    "bar_vpo_price": {
+      "type": ["number", "null"],
+      "description": "bar内体积峰值价位"
+    },
+    "bar_vpo_vol": {
+      "type": ["number", "null"],
+      "description": "bar内体积峰值对应成交量"
+    },
+    "bar_vpo_loc": {
+      "type": ["number", "null"],
+      "description": "bar内体积峰值在bar内归一化位置[0,1]"
+    },
+    "bar_vpo_side": {
+      "type": "string",
+      "description": "bar内峰值主导方向(bull/bear/neutral)"
     },
     "absorption_detected": {
       "type": ["boolean", "null"],
