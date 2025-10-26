@@ -1,0 +1,38 @@
+{
+  "$schema": "https://orderflow.example.com/schemas/model/v7",
+  "states": ["A", "B"],
+  "clusterer_config": {
+    "window_days": 30,
+    "step_days": 1,
+    "lambda": 0.97,
+    "k": 2,
+    "min_samples": 5000
+  },
+  "label_map": {
+    "A": "balance_like",
+    "B": "trend_like"
+  },
+  "macro_factor_used": ["MA200", "MA50", "volatility_atr"],
+  "prototype_drift": {
+    "metric": "psi",
+    "threshold": 0.15,
+    "lookback_days": 14
+  },
+  "drift_health": {
+    "warning": 0.10,
+    "critical": 0.15,
+    "cooldown_sec": 900
+  },
+  "tvtp": {
+    "enabled": true,
+    "drivers": ["macro_anchor", "prototype_drift"],
+    "link": "logit",
+    "smoothing": 0.2
+  },
+  "signatures": {
+    "schema_version": "v7.0",
+    "build_id": "",
+    "data_manifest_hash": "",
+    "calibration_hash": ""
+  }
+}

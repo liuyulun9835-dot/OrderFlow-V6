@@ -1,0 +1,17 @@
+thresholds:
+  prototype_drift: 0.15
+  ece: 0.08
+  brier: 0.18
+  abstain_low: 0.10
+  abstain_high: 0.25
+reports:
+  - output/publish_docs/VALIDATION.md
+artifacts:
+  - output/results/OF_V7_stats.xlsx
+gates:
+  - name: drift_gate
+    condition: "prototype_drift < thresholds.prototype_drift"
+  - name: calibration_gate
+    condition: "ece < thresholds.ece and brier < thresholds.brier"
+  - name: abstain_gate
+    condition: "abstain_rate >= thresholds.abstain_low and abstain_rate <= thresholds.abstain_high"

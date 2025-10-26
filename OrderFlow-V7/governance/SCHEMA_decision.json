@@ -1,0 +1,35 @@
+{
+  "$schema": "https://orderflow.example.com/schemas/decision/v7",
+  "trigger": {
+    "type": "transition",
+    "from": "A",
+    "to": "B",
+    "prob": 0.82,
+    "threshold": 0.75,
+    "min_duration": 3
+  },
+  "directional_classifier": {
+    "label": "bullish",
+    "confidence": 0.73,
+    "inputs": ["MFI", "CVD", "informed_proxy"],
+    "cooldown_sec": 900
+  },
+  "clarity": 0.68,
+  "clarity_thresholds": {
+    "enter": 0.6,
+    "scale": 0.8,
+    "exit": 0.4
+  },
+  "abstain": false,
+  "reason": "clarity>τ && validation.gates_passed",
+  "macro_factor_used": "MA200",
+  "drift_flags": {
+    "prototype_drift": 0.11,
+    "drift_gate_passed": true
+  },
+  "audit": {
+    "decision_id": "",
+    "generated_at": "",
+    "validator_version": "validator_v2"
+  }
+}
