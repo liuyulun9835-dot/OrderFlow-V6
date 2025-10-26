@@ -1,0 +1,12 @@
+window_days: 30
+step_days: 1
+lambda: 0.97
+n_components: 2
+min_samples: 5000
+drift_metric: psi
+feature_sources:
+  - data/processed/microflow/latest.npy
+  - data/processed/macro_factor/latest.npy
+outputs:
+  labels: output/results/clusterer_dynamic/labels_wt.npy
+  artifacts: output/results/clusterer_dynamic/cluster_artifacts.json

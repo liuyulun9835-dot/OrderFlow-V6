@@ -1,0 +1,66 @@
+{
+  "governance": {
+    "weight": 1.0,
+    "checks": [
+      {"id": "schema_model", "path": "governance/SCHEMA_model.json", "must_contain": ["states", "tvtp", "macro_factor_used", "signatures"]},
+      {"id": "schema_decision", "path": "governance/SCHEMA_decision.json", "must_contain": ["trigger", "directional_classifier"]},
+      {"id": "rules_transition", "path": "governance/RULES_library.yaml", "must_contain": ["transition("]}
+    ]
+  },
+  "data": {
+    "weight": 1.0,
+    "checks": [
+      {"id": "manifests", "path": "data/manifests", "type": "dir"},
+      {"id": "ingestion", "path": "data/ingestion", "type": "dir"}
+    ]
+  },
+  "features": {
+    "weight": 1.0,
+    "checks": [
+      {"id": "microflow", "path": "features/microflow", "type": "dir"},
+      {"id": "macro_factor", "path": "features/macro_factor", "type": "dir"}
+    ]
+  },
+  "model": {
+    "weight": 1.0,
+    "checks": [
+      {"id": "train_tvtp", "path": "model/hmm_tvtp_hsmm/train_tvtp.py"},
+      {"id": "state_inference", "path": "model/hmm_tvtp_hsmm/state_inference.py"},
+      {"id": "artifact", "path": "model/hmm_tvtp_hsmm/artifacts", "type": "dir"}
+    ]
+  },
+  "decision": {
+    "weight": 1.0,
+    "checks": [
+      {"id": "directional", "path": "decision/directional_classifier.py"},
+      {"id": "rules_examples", "path": "decision/rules/transition_examples.yaml"}
+    ]
+  },
+  "execution": {
+    "weight": 0.8,
+    "checks": [
+      {"id": "switch_policy", "path": "execution/switch_policy.yaml"}
+    ]
+  },
+  "validation": {
+    "weight": 1.0,
+    "checks": [
+      {"id": "univariate", "path": "orderflow_v_6/validation/src/univariate.py"},
+      {"id": "multivariate", "path": "orderflow_v_6/validation/src/multivariate.py"},
+      {"id": "validator_cfg", "path": "orderflow_v_6/validation/configs/validator_v2.yaml"}
+    ]
+  },
+  "output": {
+    "weight": 0.6,
+    "checks": [
+      {"id": "validation_md", "path": "output/publish_docs/VALIDATION.md"}
+    ]
+  },
+  "docs": {
+    "weight": 0.6,
+    "checks": [
+      {"id": "readme", "path": "README.md"},
+      {"id": "todo", "path": "order_flow_v_6_todo.md"}
+    ]
+  }
+}

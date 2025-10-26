@@ -1,0 +1,31 @@
+cooldown:
+  default_sec: 900
+  reset_on_transition: true
+risk_limits:
+  max_notional: 1_500_000
+  max_leverage: 5
+  per_state:
+    A:
+      exposure: 0.35
+    B:
+      exposure: 0.55
+validators:
+  drift_metrics:
+    prototype_drift:
+      threshold: 0.15
+      action_on_breach: "abstain"
+    clarity_health:
+      warning: 0.55
+      critical: 0.45
+  abstain_rate:
+    floor: 0.10
+    ceiling: 0.25
+    evaluation_window: "7d"
+  calibration:
+    ece: 0.08
+    brier: 0.18
+escalations:
+  - when: drift_metrics.prototype_drift > 0.15
+    notify: ["ml_ops", "risk_officer"]
+  - when: abstain_rate > 0.25
+    notify: ["product", "risk_officer"]

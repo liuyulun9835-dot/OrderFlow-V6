@@ -1,0 +1,14 @@
+hidden_states: 2
+max_iter: 50
+tol: 0.0001
+emissions: data/processed/hmm/emissions/emissions.npy
+drivers: data/processed/hmm/drivers/drivers.npy
+outputs:
+  artifacts: output/results/hmm_tvtp_adaptive/tvtp_artifacts.json
+  calibration_report: output/publish_docs/VALIDATION.md
+calibration_targets:
+  prototype_drift: 0.15
+  ece: 0.08
+  brier: 0.18
+  abstain_rate_low: 0.10
+  abstain_rate_high: 0.25

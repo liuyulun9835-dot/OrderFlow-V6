@@ -1,0 +1,41 @@
+rules:
+  - id: transition_enter_long
+    description: |
+      当状态由 A 迁移至 B 且转移概率高于阈值时，触发方向判别器并准备开仓。
+    when:
+      transition:
+        from: A
+        to: B
+        prob_greater_than: 0.75
+        min_duration: 3
+    then:
+      directional: use_classifier
+      cool_down_sec: 900
+      risk_cap: medium
+  - id: transition_enter_short
+    description: |
+      当状态由 B 迁移至 A 时调用方向判别器，若清晰度不足则保持观望。
+    when:
+      transition:
+        from: B
+        to: A
+        prob_greater_than: 0.78
+        min_duration: 2
+    then:
+      directional: use_classifier
+      clarity_floor: 0.55
+      cool_down_sec: 900
+  - id: low_confidence_abstain
+    description: |
+      当 clarity 或校准指标未通过门控时，执行弃权流程并记录原因。
+    when:
+      any:
+        - low_confidence:
+            clarity_less_than: 0.5
+        - gate_failed:
+            name: calibration_gate
+    then:
+      action: abstain
+      audit:
+        reason: "clarity 或校准未满足阈值"
+        notify: governance

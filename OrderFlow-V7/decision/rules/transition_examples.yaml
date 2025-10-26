@@ -1,0 +1,18 @@
+- id: enter_B_with_direction
+  when: transition(A->B, prob>0.75, min_dur: 3)
+  then:
+    directional: use_classifier
+    risk_cap: mid
+    cool_down_sec: 900
+- id: scale_in_B
+  when: transition(A->B, prob>0.85) and clarity>0.8
+  then:
+    action: scale
+    size: incremental
+    notes: "requires validator_v2 pass"
+- id: exit_on_drift
+  when: prototype_drift>0.15 or low_confidence(clarity<0.5)
+  then:
+    action: reduce
+    cool_down_sec: 900
+    audit: log
