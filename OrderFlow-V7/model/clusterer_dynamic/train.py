@@ -15,9 +15,22 @@ from typing import Iterable, Tuple
 
 import numpy as np
 
-# 假设存在 V6 的工具包可复用
+def _ensure_v6_legacy() -> Path | None:
+    import sys
+
+    root = next((p for p in Path(__file__).resolve().parents if (p / "third_party").exists()), None)
+    if root and str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    from third_party.legacy_bootstrap import ensure_v6_legacy
+
+    return ensure_v6_legacy()
+
+
+_LEGACY_ROOT = _ensure_v6_legacy()
+
 try:
-    from orderflow_v_6.utils.seed import seed_everything
+    from v6_legacy.utils.seed import seed_everything
 except ImportError:  # pragma: no cover - V7 将提供新的工具实现
     def seed_everything(seed: int) -> None:
         np.random.seed(seed)

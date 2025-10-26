@@ -45,9 +45,9 @@
   "validation": {
     "weight": 1.0,
     "checks": [
-      {"id": "univariate", "path": "orderflow_v_6/validation/src/univariate.py"},
-      {"id": "multivariate", "path": "orderflow_v_6/validation/src/multivariate.py"},
-      {"id": "validator_cfg", "path": "orderflow_v_6/validation/configs/validator_v2.yaml"}
+      {"id": "univariate", "path": "third_party/v6_legacy/validation/src/univariate.py"},
+      {"id": "multivariate", "path": "third_party/v6_legacy/validation/src/multivariate.py"},
+      {"id": "validator_cfg", "path": "third_party/v6_legacy/validation/configs/validator_v2.yaml"}
     ]
   },
   "output": {

@@ -1,0 +1,1 @@
+"""ATAS bridge integrations."""

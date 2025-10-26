@@ -1,0 +1,24 @@
+univariate:
+  alpha: 0.05
+  tests:
+    - name: feature_return
+      effect: cohen_d
+      metric: ttest
+multivariate:
+  alpha: 0.05
+  simulations: 1000
+# Pre-registration template for Validator experiments
+version: 1
+hypotheses:
+  - id: H1
+    description: "Feature group A improves PnL under base cost"
+    test: t-test
+    effect_size: cohens_d
+  - id: H2
+    description: "Feature group B reduces drawdown"
+    test: mannwhitney
+    effect_size: cliffs_delta
+multiple_testing:
+  method: fdr_bh
+  alpha: 0.05
+notes: "Update per experiment before Validator run"

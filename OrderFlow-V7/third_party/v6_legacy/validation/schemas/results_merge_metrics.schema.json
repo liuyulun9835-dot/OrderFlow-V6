@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "results/merge_metrics.json schema",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "computed_at",
+    "mismatch_rate",
+    "sample_size",
+    "stats",
+    "window"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "computed_at": { "type": "string", "format": "date-time" },
+    "data_manifest_hash": { "type": "string" },
+    "window": {
+      "type": "object",
+      "required": ["start", "end"],
+      "additionalProperties": false,
+      "properties": {
+        "start": { "type": "string", "format": "date-time" },
+        "end": { "type": "string", "format": "date-time" }
+      }
+    },
+    "sample_size": { "type": "integer", "minimum": 0 },
+    "stats": {
+      "type": "object",
+      "required": ["total_pairs", "mismatched_pairs", "tolerance_seconds", "direction"],
+      "additionalProperties": false,
+      "properties": {
+        "total_pairs": { "type": "integer", "minimum": 0 },
+        "mismatched_pairs": { "type": "integer", "minimum": 0 },
+        "tolerance_seconds": { "type": "integer", "minimum": 0 },
+        "direction": { "type": "string", "enum": ["backward", "forward", "nearest"] }
+      }
+    },
+    "mismatch_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

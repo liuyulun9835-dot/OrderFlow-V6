@@ -21,8 +21,8 @@ TREE = r"""
 │   └── report/{release.yml,INVESTIGATION.md,report_source_intent.md}
 ├── docs/
 │   └── migrations/{card_mapping.csv,file_moves.csv,import_rewrites.csv}
-├── orderflow_v_6/
-│   └── compat/__init__.py
+├── third_party/
+│   └── v6_legacy/{core,validation,cli,utils}
 ├── data/
 │   ├── raw/{exchange,atas/{bar,tick}}
 │   ├── preprocessing/{schemas,align}

@@ -1,4 +1,4 @@
-# [MIGRATED_FROM_V6] 2025-10-26: 原路径 orderflow_v_6/validation/src/tick_quality_report.py；本文件在 V7 中保持向后兼容
+# [MIGRATED_FROM_V6] 2025-10-26: 原路径 v6_legacy/validation/src/tick_quality_report.py；本文件在 V7 中保持向后兼容
 """Tick quality report with arrival statistics."""
 
 from __future__ import annotations
@@ -11,7 +11,22 @@ from typing import Iterable
 
 import pandas as pd
 
-from orderflow_v_6.core.seeding import seed_all
+
+def _ensure_v6_legacy() -> Path | None:
+    import sys
+
+    root = next((p for p in Path(__file__).resolve().parents if (p / "third_party").exists()), None)
+    if root and str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    from third_party.legacy_bootstrap import ensure_v6_legacy
+
+    return ensure_v6_legacy()
+
+
+_LEGACY_ROOT = _ensure_v6_legacy()
+
+from v6_legacy.core.seeding import seed_all
 
 RESULT_PATH = Path("output/qa/tick_quality_report.md")
 

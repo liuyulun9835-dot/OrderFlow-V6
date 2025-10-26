@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# [MIGRATED_FROM_V6] 2025-10-26: 原路径 orderflow_v_6/validation/src/qc_report.py；本文件在 V7 中保持向后兼容
+# [MIGRATED_FROM_V6] 2025-10-26: 原路径 v6_legacy/validation/src/qc_report.py；本文件在 V7 中保持向后兼容
 """Generate a markdown quality-control report for processed feature data."""
 from __future__ import annotations
 
@@ -8,6 +8,23 @@ from pathlib import Path
 from typing import List
 
 import pandas as pd
+
+
+def _ensure_v6_legacy() -> Path | None:
+    import sys
+
+    root = next((p for p in Path(__file__).resolve().parents if (p / "third_party").exists()), None)
+    if root and str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    from third_party.legacy_bootstrap import ensure_v6_legacy
+
+    return ensure_v6_legacy()
+
+
+_LEGACY_ROOT = _ensure_v6_legacy()
+
+from v6_legacy.core.seeding import seed_all
 
 
 DEFAULT_FEATURES_PATH = Path("data/processed/features.parquet")

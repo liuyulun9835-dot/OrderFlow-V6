@@ -1,4 +1,4 @@
-# [MIGRATED_FROM_V6] 2025-10-26: 原路径 orderflow_v_6/validation/src/precheck_costs.py；本文件在 V7 中保持向后兼容
+# [MIGRATED_FROM_V6] 2025-10-26: 原路径 v6_legacy/validation/src/precheck_costs.py；本文件在 V7 中保持向后兼容
 """Cost robustness gate prior to validator execution."""
 
 from __future__ import annotations
@@ -11,7 +11,27 @@ from typing import Iterable
 
 import yaml
 
-from orderflow_v_6.core.seeding import seed_all
+
+def _ensure_v6_legacy() -> Path | None:
+    import sys
+
+    root = next((p for p in Path(__file__).resolve().parents if (p / "third_party").exists()), None)
+    if root and str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    from third_party.legacy_bootstrap import ensure_v6_legacy
+
+    return ensure_v6_legacy()
+
+
+_LEGACY_ROOT = _ensure_v6_legacy()
+LEGACY_CONFIG_ROOT = (
+    Path(_LEGACY_ROOT)
+    if _LEGACY_ROOT is not None
+    else Path(__file__).resolve().parents[2] / "third_party" / "v6_legacy"
+)
+
+from v6_legacy.core.seeding import seed_all
 
 RESULT_PATH = Path("output/qa/cost_sensitivity.md")
 JSON_PATH = Path("output/qa/precheck_costs_report.json")
@@ -82,7 +102,11 @@ def gate_passed(scenarios: list[ScenarioResult]) -> bool:
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Cost precheck gate")
-    parser.add_argument("--config", type=Path, default=Path("orderflow_v_6/validation/configs/costs.yaml"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=LEGACY_CONFIG_ROOT / "validation" / "configs" / "costs.yaml",
+    )
     parser.add_argument("--output", type=Path, default=RESULT_PATH)
     parser.add_argument("--json", type=Path, default=JSON_PATH)
     args = parser.parse_args(list(argv) if argv is not None else None)

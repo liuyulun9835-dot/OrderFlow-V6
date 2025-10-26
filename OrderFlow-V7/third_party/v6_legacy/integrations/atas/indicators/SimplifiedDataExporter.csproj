@@ -1,0 +1,123 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Library</OutputType>
+    <!-- 改装配名以携带新身份 -->
+    <AssemblyName>SimplifiedDataExporter.V63</AssemblyName>
+    <Version>6.3.0.0</Version>
+    <AssemblyVersion>6.3.0.0</AssemblyVersion>
+    <FileVersion>6.3.0.0</FileVersion>
+    <RootNamespace>AtasCustomIndicators.V63</RootNamespace>
+    <Configurations>Debug;Release</Configurations>
+    <Platforms>AnyCPU</Platforms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+
+    <!-- 不使用确定性构建，便于每次版本产出新签名/身份 -->
+    <Deterministic>false</Deterministic>
+
+    <!-- 暂时关闭强签名，方便本地测试 -->
+    <SignAssembly>false</SignAssembly>
+    <!-- <AssemblyOriginatorKeyFile>signing.snk</AssemblyOriginatorKeyFile> -->
+
+    <!-- 避免在输出目录中追加 TFM/RID（保持输出路径可控） -->
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+  </PropertyGroup>
+
+  <!-- 若开发者已在 VS 中“手动添加引用”，仓库内的自动探测不会覆盖手动设置；推荐以手动为准。 -->
+  <PropertyGroup>
+    <HasManualAtasReference>false</HasManualAtasReference>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 允许环境变量覆盖 -->
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and '$(ATAS_SDK_DIR)' != '' and Exists('$(ATAS_SDK_DIR)\Atas.Indicators.dll') ">$(ATAS_SDK_DIR)</AtasSdkDir>
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and '$(ATAS_SDK_DIR)' != '' and Exists('$(ATAS_SDK_DIR)\bin\Atas.Indicators.dll') ">$(ATAS_SDK_DIR)\bin</AtasSdkDir>
+    <!-- 若未设置环境变量，则依次尝试常见安装目录（含/不含 bin） -->
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and Exists('C:\Program Files (x86)\ATAS Platform\Atas.Indicators.dll') ">C:\Program Files (x86)\ATAS Platform</AtasSdkDir>
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and Exists('C:\Program Files (x86)\ATAS Platform\bin\Atas.Indicators.dll') ">C:\Program Files (x86)\ATAS Platform\bin</AtasSdkDir>
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and Exists('C:\Program Files\ATAS\Atas.Indicators.dll') ">C:\Program Files\ATAS</AtasSdkDir>
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and Exists('C:\Program Files\ATAS\bin\Atas.Indicators.dll') ">C:\Program Files\ATAS\bin</AtasSdkDir>
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and '$(LOCALAPPDATA)' != '' and Exists('$(LOCALAPPDATA)\Programs\ATAS\Atas.Indicators.dll') ">$(LOCALAPPDATA)\Programs\ATAS</AtasSdkDir>
+    <AtasSdkDir Condition=" '$(AtasSdkDir)' == '' and '$(LOCALAPPDATA)' != '' and Exists('$(LOCALAPPDATA)\Programs\ATAS\bin\Atas.Indicators.dll') ">$(LOCALAPPDATA)\Programs\ATAS\bin</AtasSdkDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <Optimize>true</Optimize>
+    <DebugType>portable</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ATAS.Indicators">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\ATAS Platform\ATAS.Indicators.dll</HintPath>
+    </Reference>
+    <Reference Include="ATAS.Indicators.Technical">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\ATAS Platform\ATAS.Indicators.Technical.dll</HintPath>
+    </Reference>
+    <Reference Include="ATAS.Types">
+      <HintPath>..\..\..\..\..\..\..\Program Files (x86)\ATAS Platform\ATAS.Types.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.CSharp" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <Target Name="ResolveAtasReferences" BeforeTargets="ResolveReferences">
+    <ItemGroup>
+      <_ManualAtasReference Include="@(Reference)" Condition="'%(Reference.HintPath)' != '' and $([System.IO.Path]::IsPathRooted('%(Reference.HintPath)')) and $([System.String]::Copy('%(Reference.Identity)').ToUpperInvariant().StartsWith('ATAS.'))" />
+    </ItemGroup>
+
+    <PropertyGroup>
+      <HasManualAtasReference Condition="'@(_ManualAtasReference)' != ''">true</HasManualAtasReference>
+      <HasManualAtasReference Condition="'@(_ManualAtasReference)' == ''">false</HasManualAtasReference>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(HasManualAtasReference)' != 'true' and '$(AtasSdkDir)' != ''">
+      <Reference Include="Atas.Indicators" Condition="Exists('$(AtasSdkDir)\Atas.Indicators.dll')">
+        <HintPath>$(AtasSdkDir)\Atas.Indicators.dll</HintPath>
+        <Private>false</Private>
+        <SpecificVersion>false</SpecificVersion>
+      </Reference>
+      <Reference Include="ATAS.Types" Condition="Exists('$(AtasSdkDir)\ATAS.Types.dll')">
+        <HintPath>$(AtasSdkDir)\ATAS.Types.dll</HintPath>
+        <Private>false</Private>
+        <SpecificVersion>false</SpecificVersion>
+      </Reference>
+      <Reference Include="ATAS.Indicators.Technical" Condition="Exists('$(AtasSdkDir)\ATAS.Indicators.Technical.dll')">
+        <HintPath>$(AtasSdkDir)\ATAS.Indicators.Technical.dll</HintPath>
+        <Private>false</Private>
+        <SpecificVersion>false</SpecificVersion>
+      </Reference>
+      <Reference Include="ATAS.Indicators.Other" Condition="Exists('$(AtasSdkDir)\ATAS.Indicators.Other.dll')">
+        <HintPath>$(AtasSdkDir)\ATAS.Indicators.Other.dll</HintPath>
+        <Private>false</Private>
+        <SpecificVersion>false</SpecificVersion>
+      </Reference>
+      <Reference Include="ATAS.Strategies" Condition="Exists('$(AtasSdkDir)\ATAS.Strategies.dll')">
+        <HintPath>$(AtasSdkDir)\ATAS.Strategies.dll</HintPath>
+        <Private>false</Private>
+        <SpecificVersion>false</SpecificVersion>
+      </Reference>
+      <Reference Include="ATAS.DataFeedsCore" Condition="Exists('$(AtasSdkDir)\ATAS.DataFeedsCore.dll')">
+        <HintPath>$(AtasSdkDir)\ATAS.DataFeedsCore.dll</HintPath>
+        <Private>false</Private>
+        <SpecificVersion>false</SpecificVersion>
+      </Reference>
+      <Reference Include="ADataFeeder8" Condition="Exists('$(AtasSdkDir)\ADataFeeder8.dll')">
+        <HintPath>$(AtasSdkDir)\ADataFeeder8.dll</HintPath>
+        <Private>false</Private>
+        <SpecificVersion>false</SpecificVersion>
+      </Reference>
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CheckAtasSdk" BeforeTargets="Build">
+    <Warning Condition=" '$(AtasSdkDir)' == '' " Text="未解析到 ATAS SDK 目录。可在 VS 中手动添加引用，或设置 ATAS_SDK_DIR / 安装到常见路径。" />
+    <Warning Condition=" '$(AtasSdkDir)' != '' and !Exists('$(AtasSdkDir)\Atas.Indicators.dll') " Text="未发现 $(AtasSdkDir)\Atas.Indicators.dll，请检查路径或 ATAS_SDK_DIR。" />
+  </Target>
+
+  <!-- 额外的输出文件名（双保险） -->
+  <Target Name="RenameOutput" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(TargetDir)SimplifiedDataExporter_v63_$(FileVersion).dll" OverwriteReadOnlyFiles="true" />
+  </Target>
+</Project>

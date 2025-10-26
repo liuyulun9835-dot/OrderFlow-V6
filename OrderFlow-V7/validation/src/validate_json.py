@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# [MIGRATED_FROM_V6] 2025-10-26: 原路径 orderflow_v_6/validation/src/validate_json.py；本文件在 V7 中保持向后兼容
+# [MIGRATED_FROM_V6] 2025-10-26: 原路径 v6_legacy/validation/src/validate_json.py；本文件在 V7 中保持向后兼容
 """Validate ATAS JSON exports against the repository schema."""
 
 from __future__ import annotations

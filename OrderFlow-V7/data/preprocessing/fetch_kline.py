@@ -12,7 +12,22 @@ from typing import List, Optional
 import ccxt  # type: ignore
 import pandas as pd
 
-from orderflow_v_6.core.seeding import seed_all
+
+def _ensure_v6_legacy() -> Path | None:
+    import sys
+
+    root = next((p for p in Path(__file__).resolve().parents if (p / "third_party").exists()), None)
+    if root and str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    from third_party.legacy_bootstrap import ensure_v6_legacy
+
+    return ensure_v6_legacy()
+
+
+_LEGACY_ROOT = _ensure_v6_legacy()
+
+from v6_legacy.core.seeding import seed_all
 
 def parse_timeframe(value: str) -> timedelta:
     value = value.strip().lower()

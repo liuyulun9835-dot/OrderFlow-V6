@@ -1,0 +1,155 @@
+OrderFlow-V7
+├── data
+│   ├── ingestion
+│   │   └── alignment
+│   │       ├── __init__.py
+│   │       ├── merge_to_features.py
+│   │       └── sessions.py
+│   ├── manifests
+│   │   └── .gitkeep
+│   └── preprocessing
+│       ├── README.md
+│       ├── __init__.py
+│       ├── fetch_kline.py
+│       ├── schemas
+│       │   └── atas_schema.json
+│       └── utils
+│           ├── __init__.py
+│           └── error_ledger.py
+├── decision
+│   ├── engine
+│   │   └── decision_engine.py
+│   └── rules
+│       └── transition_examples.yaml
+├── docs
+│   ├── V6_V7对照清单.md
+│   └── V6历史工程日志记录.md
+├── execution
+│   ├── risk
+│   │   └── __init__.py
+│   └── switch
+│       └── __init__.py
+├── features
+│   ├── macro_factor
+│   │   ├── config.yaml
+│   │   └── macro_factor_slowanchor.parquet
+│   └── microflow
+│       └── .gitkeep
+├── governance
+│   ├── CONTROL_switch_policy.yaml
+│   ├── RULES_library.yaml
+│   ├── SCHEMA_decision.json
+│   └── SCHEMA_model.json
+├── model
+│   ├── clusterer_dynamic
+│   │   ├── README.md
+│   │   ├── config.yaml
+│   │   └── train.py
+│   └── hmm_tvtp_adaptive
+│       ├── README.md
+│       ├── config.yaml
+│       └── train.py
+├── output
+│   ├── publish_docs
+│   │   └── .gitkeep
+│   ├── qa
+│   │   └── .gitkeep
+│   ├── report
+│   │   └── .gitkeep
+│   └── results
+│       └── .gitkeep
+├── scripts
+│   ├── reclassify_cards.py
+│   └── update_repo_structure.py
+├── third_party
+│   ├── __init__.py
+│   ├── legacy_bootstrap.py
+│   └── v6_legacy
+│       ├── __init__.py
+│       ├── cli
+│       │   ├── __init__.py
+│       │   └── scripts
+│       │       ├── batch_replay.bat
+│       │       ├── batch_replay.sh
+│       │       ├── build_exporter.ps1
+│       │       ├── canary_switch_dryrun.py
+│       │       ├── init_data_tree.ps1
+│       │       ├── init_data_tree.py
+│       │       ├── make_data_pipeline.ps1
+│       │       └── update_pipeline.ps1
+│       ├── compat
+│       │   └── __init__.py
+│       ├── core
+│       │   ├── __init__.py
+│       │   └── seeding.py
+│       ├── integrations
+│       │   ├── __init__.py
+│       │   └── atas
+│       │       ├── Directory.Build.props
+│       │       ├── __init__.py
+│       │       ├── data_bridge
+│       │       │   └── .gitkeep
+│       │       └── indicators
+│       │           ├── ATAS_EXPORTER_README.md
+│       │           ├── SimplifiedDataExporter.cs
+│       │           └── SimplifiedDataExporter.csproj
+│       ├── tests
+│       │   ├── __init__.py
+│       │   ├── test_calibration_stratified.py
+│       │   ├── test_fetch_kline_io.py
+│       │   ├── test_merge_offset_tolerance.py
+│       │   ├── test_minute_boundary_right_closed.py
+│       │   ├── test_precheck_costs_gate.py
+│       │   └── test_validate_json_dual_schema.py
+│       ├── utils
+│       │   ├── __init__.py
+│       │   └── seed.py
+│       └── validation
+│           ├── __init__.py
+│           ├── configs
+│           │   ├── __init__.py
+│           │   ├── costs.yaml
+│           │   ├── preregister.yaml
+│           │   ├── priority_downgrade.yaml
+│           │   └── validator_v2.yaml
+│           ├── out
+│           │   └── .gitkeep
+│           ├── schemas
+│           │   ├── results_calibration_profile.schema.json
+│           │   └── results_merge_metrics.schema.json
+│           └── src
+│               ├── __init__.py
+│               ├── bar_continuity_report.py
+│               ├── make_labels.py
+│               ├── multivariate.py
+│               ├── precheck_costs.py
+│               ├── qc_report.py
+│               ├── tick_quality_report.py
+│               ├── univariate.py
+│               ├── validate_json.py
+│               ├── validate_outputs.py
+│               └── validate_results_schemas.py
+├── tools
+│   ├── audit_revision2.py
+│   ├── extract_spec.py
+│   ├── progress_spec.json
+│   └── score_progress.py
+└── validation
+    ├── configs
+    │   └── validator_v2.yaml
+    ├── reports
+    │   └── .gitkeep
+    └── src
+        ├── __init__.py
+        ├── bar_continuity_report.py
+        ├── make_labels.py
+        ├── multivariate.py
+        ├── precheck_costs.py
+        ├── qc_report.py
+        ├── tick_quality_report.py
+        ├── univariate.py
+        ├── validate_json.py
+        ├── validate_outputs.py
+        └── validate_results_schemas.py
+
+50 directories, 103 files
