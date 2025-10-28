@@ -1,40 +1,25 @@
 {
-  "schema_version": "v7.0",
-  "description": "Feature manifest for OrderFlow V7 combining microstructure signals with optional macro anchors.",
-  "micro_features": {
-    "rolling_window": "1m",
-    "columns": [
-      {"name": "ret_1m", "source": "data", "description": "(close/open)-1", "type": "float"},
-      {"name": "hl_range", "source": "data", "description": "(high-low)/mid", "type": "float"},
-      {"name": "vol_1m", "source": "data", "description": "log volume", "type": "float"},
-      {"name": "cvd_norm", "source": "data", "description": "CVD normalised by volatility", "type": "float"},
-      {"name": "vpo_loc", "source": "data", "description": "Volume point location", "type": "float"},
-      {"name": "vpo_bias", "source": "data", "description": "Directional VPO bias", "type": "int"},
-      {"name": "vpo_intensity", "source": "data", "description": "VPO volume ratio", "type": "float"},
-      {"name": "spread_proxy", "source": "data", "description": "(high-low)/close", "type": "float"},
-      {"name": "absorb_flag", "source": "data", "description": "Absorption indicator", "type": "int"},
-      {"name": "absorb_side", "source": "data", "description": "Absorption side", "type": "int"},
-      {"name": "absorb_strength", "source": "data", "description": "Absorption strength", "type": "float"},
-      {"name": "poc_gap", "source": "data", "description": "POC-close", "type": "float"},
-      {"name": "vah_gap", "source": "data", "description": "VAH-close", "type": "float"},
-      {"name": "val_gap", "source": "data", "description": "VAL-close", "type": "float"},
-      {"name": "trend_proxy", "source": "data", "description": "EMA(20)-EMA(50) / close", "type": "float"},
-      {"name": "rv_5m", "source": "data", "description": "5m realised volatility proxy", "type": "float"}
-    ]
-  },
-  "macro_features": [],
-  "derived": {
-    "clarity": {
-      "inputs": ["label_weight", "transition_prob"],
-      "description": "Piecewise mapping from cluster weight and TVTP posteriors to risk exposure." 
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Central Kitchen Feature Tables",
+  "type": "object",
+  "properties": {
+    "micro_features": {
+      "type":"array",
+      "items":{"type":"string"},
+      "default":[
+        "open","high","low","close","volume",
+        "cvd",
+        "bar_vpo_price","bar_vpo_vol","bar_vpo_loc","bar_vpo_side",
+        "range1m","real_body","upper_wick","lower_wick","hlc3","ohlc_vol_norm",
+        "impute_flag"
+      ]
     },
-    "drift_health": {
-      "inputs": ["prototype_drift"],
-      "description": "Scaled drift metric for CONTROL thresholds."
+    "macro_features": {
+      "type":"array",
+      "items":{"type":"string"},
+      "description":"optional slow factors; placeholder at M0",
+      "default":[]
     }
   },
-  "artifacts": {
-    "macro_factor_file": "features/macro_factor/macro_features.parquet",
-    "cluster_labels": "output/clusterer_dynamic/labels_wt.parquet"
-  }
+  "required": ["micro_features"]
 }

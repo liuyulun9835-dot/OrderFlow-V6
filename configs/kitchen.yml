@@ -1,0 +1,9 @@
+atas:
+  exe_path: "C:\\Program Files\\ATAS\\ATAS.exe"     # placeholder
+  workspace: "C:\\ATAS\\Workspaces\\of_export_workspace.aws"  # placeholder
+  heartbeat: "data/raw/atas/.heartbeat"             # file updated by indicator (TBD)
+binance:
+  symbol: "BTC/USDT"
+  outdir: "data/raw/binance"
+pipeline:
+  snapshots_dir: "snapshots"

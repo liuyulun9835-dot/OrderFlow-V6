@@ -1,6 +1,0 @@
-# WHY: Provide configuration enabling directional breakdown outputs expected by docs.
-outputs:
-  directional_breakdown: true
-  tvtp_macro_vs_nomacro: true
-thresholds:
-  min_directional_consistency: 0.55
