@@ -1,78 +1,17 @@
 {
-  "schema_version": "v7.0",
-  "dataset": {
-    "name": "orderflow_v7_binance_atas_1m",
-    "description": "Minute bars from Binance (spot) joined with ATAS microstructure export and rolling cluster annotations for the V7 pipeline.",
-    "window": {
-      "interval": "1m",
-      "timezone": "UTC",
-      "rolling_days": 30
-    }
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Central Kitchen Baseline Bar Schema (V7)",
+  "type": "object",
+  "properties": {
+    "ts": {"type":"string","format":"date-time"},                       // UTC
+    "open": {"type":"number"},
+    "high": {"type":"number"},
+    "low": {"type":"number"},
+    "close": {"type":"number"},
+    "volume": {"type":"number"},
+    "minute_open": {"type":"string","format":"date-time"},
+    "minute_close": {"type":"string","format":"date-time"},
+    "src_span_ok": {"type":"boolean"}                                   // both sources present in this minute
   },
-  "sources": {
-    "binance": {
-      "kind": "exchange",
-      "instrument": ["BTCUSDT", "ETHUSDT"],
-      "fields": ["open_time_ms", "open", "high", "low", "close", "volume", "minute_open", "minute_close"],
-      "notes": "Primary OHLCV backbone; timestamps expressed in milliseconds since epoch (UTC)."
-    },
-    "atas": {
-      "kind": "orderflow_export",
-      "schema_version": "v6.3",
-      "fields": [
-        "bar_vpo_price",
-        "bar_vpo_vol",
-        "bar_vpo_loc",
-        "bar_vpo_side",
-        "absorption_detected",
-        "absorption_strength",
-        "absorption_side",
-        "cvd",
-        "flush_seq",
-        "window_id",
-        "window_convention",
-        "exporter_version",
-        "fingerprint"
-      ],
-      "notes": "ATAS JSONL export aligned to Binance backbone; absorption_* fields may be null when no event is detected."
-    }
-  },
-  "columns": [
-    {"name": "open_time_ms", "type": "int64", "source": "binance", "required": true, "description": "Bar open timestamp in milliseconds."},
-    {"name": "close_time_ms", "type": "int64", "source": "binance", "required": true, "description": "Bar close timestamp in milliseconds."},
-    {"name": "open", "type": "float", "source": "binance", "required": true, "description": "Open price."},
-    {"name": "high", "type": "float", "source": "binance", "required": true, "description": "High price."},
-    {"name": "low", "type": "float", "source": "binance", "required": true, "description": "Low price."},
-    {"name": "close", "type": "float", "source": "binance", "required": true, "description": "Close price."},
-    {"name": "volume", "type": "float", "source": "binance", "required": true, "description": "Traded volume for the bar."},
-    {"name": "minute_open", "type": "string", "source": "binance", "required": true, "description": "ISO-8601 open timestamp for the minute bar."},
-    {"name": "minute_close", "type": "string", "source": "binance", "required": true, "description": "ISO-8601 close timestamp for the minute bar."},
-    {"name": "cvd", "type": "float", "source": "atas", "required": true, "description": "Cumulative volume delta aligned to the bar window."},
-    {"name": "bar_vpo_price", "type": "float", "source": "atas", "required": false, "description": "Volume point of bar price level."},
-    {"name": "bar_vpo_vol", "type": "float", "source": "atas", "required": false, "description": "Volume captured at the VPO price."},
-    {"name": "bar_vpo_loc", "type": "float", "source": "atas", "required": false, "description": "VPO location along the bar (0=low, 1=high)."},
-    {"name": "bar_vpo_side", "type": "string", "source": "atas", "required": false, "description": "Directional bias of the VPO (bull/bear)."},
-    {"name": "absorption_detected", "type": "bool", "source": "atas", "required": false, "description": "Indicator that absorption was detected on the bar."},
-    {"name": "absorption_strength", "type": "float", "source": "atas", "required": false, "description": "Strength of absorption when detected."},
-    {"name": "absorption_side", "type": "string", "source": "atas", "required": false, "description": "Side of absorption (buy/sell)."},
-    {"name": "window_id", "type": "string", "source": "atas", "required": false, "description": "Identifier of the rolling window produced by the exporter."},
-    {"name": "flush_seq", "type": "int64", "source": "atas", "required": false, "description": "Exporter flush sequence (monotonic)."},
-    {"name": "fingerprint", "type": "string", "source": "atas", "required": false, "description": "Exporter fingerprint for auditing."},
-    {"name": "label", "type": "int64", "source": "model.clusterer_dynamic", "required": false, "description": "A/B label assigned by the dynamic clusterer."},
-    {"name": "label_weight", "type": "float", "source": "model.clusterer_dynamic", "required": false, "description": "Soft weight / clarity proxy from cluster assignment."}
-  ],
-  "quality": {
-    "null_handling": {
-      "bar_vpo_price": "fill_forward_if_missing",
-      "absorption_strength": "fill_zero",
-      "absorption_side": "fill_neutral"
-    },
-    "deduplication_key": ["minute_open", "minute_close", "flush_seq"],
-    "time_alignment": "All timestamps coerced to UTC minute boundaries; Binance is the canonical clock."
-  },
-  "signatures": {
-    "schema_version": "v7.0",
-    "exporter_version": "6.3.0.0",
-    "generated_at": "2025-10-26T00:00:00Z"
-  }
+  "required": ["ts","open","high","low","close","volume"]
 }

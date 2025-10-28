@@ -1,1 +1,0 @@
-"""Model artefact manifest helpers."""

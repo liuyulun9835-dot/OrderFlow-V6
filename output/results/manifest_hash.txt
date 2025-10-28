@@ -1,3 +1,0 @@
-# 每次流水线运行后由脚本自动覆盖本文件。
-# 格式：<manifest_path>,<sha256(content)>
-# 示例：manifest/initial.json,5d41402abc4b2a76b9719d911017c592
